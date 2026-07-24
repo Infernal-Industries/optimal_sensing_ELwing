@@ -64,3 +64,47 @@ export function computePFire(strainRow, enc, nldGrad = enc.nldGrad, nldShift = e
 export function computePFireAll(strain, enc, nldGrad, nldShift) {
   return strain.map((row) => computePFire(row, enc, nldGrad, nldShift));
 }
+
+/**
+ * Draws one probabilistic spike train from a P(fire) curve, exactly
+ * replicating convertProbFiringToSpikes.m's refractory-period logic: at
+ * each sample, spike if a uniform random draw is below P(fire) at that
+ * sample, then suppress (zero) the probability for refPerSamples samples
+ * afterward -- on a working copy, so the original pfire array (and the
+ * displayed P(fire) curve) is untouched.
+ * @param {number[]} pfire
+ * @param {number} refPerSamples - refractory period in samples (native resolution)
+ * @returns {number[]} 0/1 spike indicator, same length as pfire
+ */
+export function generateSpikeTrain(pfire, refPerSamples) {
+  const n = pfire.length;
+  const spikes = new Array(n).fill(0);
+  const temp = pfire.slice();
+  for (let t = 0; t < n; t++) {
+    if (Math.random() < temp[t]) {
+      spikes[t] = 1;
+      const end = Math.min(t + refPerSamples, n);
+      for (let k = t + 1; k < end; k++) temp[k] = 0;
+    }
+  }
+  return spikes;
+}
+
+/**
+ * Peristimulus time histogram: repeats generateSpikeTrain nReps times
+ * (simulating that many wingbeats, matching paper Fig 2E's "summarizing
+ * spike timing over hundreds of wingbeats") and sums spike counts per
+ * sample -- a per-time-bin spike count, ready to plot as a bar chart.
+ * @param {number[]} pfire
+ * @param {number} refPerSamples
+ * @param {number} nReps
+ * @returns {number[]} spike counts per sample, same length as pfire
+ */
+export function samplePSTH(pfire, refPerSamples, nReps) {
+  const counts = new Array(pfire.length).fill(0);
+  for (let r = 0; r < nReps; r++) {
+    const spikes = generateSpikeTrain(pfire, refPerSamples);
+    for (let t = 0; t < spikes.length; t++) counts[t] += spikes[t];
+  }
+  return counts;
+}

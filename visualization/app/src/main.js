@@ -28,9 +28,13 @@ async function main() {
     statusEl.textContent = `${firstSet.id} · stiffness factor ${firstSet.stiffnessFactor} · axis ${firstSet.axis}${quickNote}`;
 
     const timelines = createTimelines(timelinesWrap, manifest, payload, computePFire);
+    const histogram = createHistogram(histogramWrap, manifest, payload);
 
     const wing2d = createWing2D(wing2dCanvases, manifest, payload, {
-      onSelectSensor: (sensorIdx1) => timelines.setSensor(sensorIdx1 - 1),
+      onSelectSensor: (sensorIdx1) => {
+        timelines.setSensor(sensorIdx1 - 1);
+        histogram.setSensor(sensorIdx1 - 1);
+      },
     });
 
     const wing = createWingScene(canvasWrap, manifest, payload, {
@@ -54,23 +58,8 @@ async function main() {
       wing.setThreshold(manifest.encoding.nldGrad, nldShift);
       timelines.setThreshold(manifest.encoding.nldGrad, nldShift);
       wing2d.setThreshold(manifest.encoding.nldGrad, nldShift);
+      histogram.setThreshold(manifest.encoding.nldGrad, nldShift);
     });
-
-    // Histogram compares spanwise sensor distribution across ALL available
-    // precomputed sets (currently 2; grows with Phase 5's full grid) --
-    // independent of which set the 3D/2D/timeline views are showing.
-    const allSetPayloads = await Promise.all(
-      manifest.sets.map((s) => (s === firstSet ? Promise.resolve(payload) : loadSet("data", manifest, s.file)))
-    );
-    createHistogram(
-      histogramWrap,
-      manifest,
-      manifest.sets.map((s, i) => ({
-        id: s.id,
-        stiffnessFactor: s.stiffnessFactor,
-        spanHistogram: allSetPayloads[i].spanHistogram,
-      }))
-    );
   } catch (err) {
     statusEl.textContent = `Failed to load: ${err.message}`;
     console.error(err);
