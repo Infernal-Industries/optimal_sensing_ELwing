@@ -5,10 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Wing sensing — optimal_sensing_ELwing</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #0b0e14; color: #e6e6e6; font-family: system-ui, sans-serif; }
-  #app { display: flex; flex-direction: column; height: 100%; }
+  html, body { margin: 0; background: #0b0e14; color: #e6e6e6; font-family: system-ui, sans-serif; }
+  #app { display: flex; flex-direction: column; min-height: 100vh; }
   #status { padding: 0.5rem 1rem; font-size: 0.85rem; color: #9aa4b2; }
-  #canvas-wrap { flex: 1; min-height: 260px; position: relative; }
+  /* Fixed height, not flex:1 -- with this many sections now below it
+     (controls, timelines, 2D map, histogram), letting the canvas absorb
+     all leftover viewport height pushed everything else into a large,
+     confusing empty gap on tall viewports. The page scrolls normally now. */
+  #canvas-wrap { height: 420px; flex: none; position: relative; }
   canvas { display: block; }
   #controls {
     display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap;
@@ -17,6 +21,16 @@
   }
   #controls label { display: flex; align-items: center; gap: 0.4rem; }
   #controls input[type="range"] { width: 140px; }
+  #param-controls {
+    display: flex; flex-wrap: wrap; gap: 1.25rem;
+    padding: 0.6rem 1rem; background: #12151c; border-top: 1px solid #2c2c2a;
+  }
+  #accuracy-readout {
+    padding: 0.5rem 1rem; background: #12151c; border-top: 1px solid #2c2c2a;
+    font-size: 0.8rem; color: #c3c2b7;
+  }
+  #accuracy-value { color: #ffffff; font-weight: 600; }
+  #accuracy-notice { color: #898781; font-size: 0.72rem; margin-top: 2px; }
   #timelines-wrap {
     display: flex; gap: 1rem; padding: 0.5rem 1rem 1rem; background: #12151c;
     flex-wrap: wrap;
@@ -42,9 +56,18 @@
       </select>
     </label>
     <label>
-      Neural threshold (β): <span id="beta-value"></span>
-      <input type="range" id="beta-slider" min="0.05" max="0.7" step="0.01" />
+      Rotation axis:
+      <select id="axis-select">
+        <option value="yaw">yaw</option>
+        <option value="pitch">pitch</option>
+        <option value="roll">roll</option>
+      </select>
     </label>
+  </div>
+  <div id="param-controls"></div>
+  <div id="accuracy-readout">
+    Classification accuracy (top-<span id="accuracy-n"></span> sensors): <span id="accuracy-value"></span>
+    <div id="accuracy-notice"></div>
   </div>
   <div id="timelines-wrap"></div>
   <div id="wing2d-wrap">

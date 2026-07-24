@@ -80,7 +80,9 @@ function maxAbsStrain(payload) {
  *   onFrame is invoked once per rendered frame with the current animation
  *   frame index and the elapsed time (ms) within the wingbeat, so callers
  *   (timelines.js's playhead) can stay in sync without polling.
- * @returns {{dispose: () => void, setColorMode: (mode:'strain'|'pfire') => void, setThreshold: (nldGrad:number, nldShift:number) => void}}
+ * @returns {{dispose: () => void, setColorMode: (mode:'strain'|'pfire') => void,
+ *   setThreshold: (nldGrad:number, nldShift:number, staFreq:number) => void,
+ *   setSpeed: (multiplier:number) => void, setSensorCount: (n:number) => void}}
  */
 export function createWingScene(container, manifest, payload, opts = {}) {
   const { chordElements, spanElements, chord_mm: chordMm, span_mm: spanMm } = manifest.grid;
@@ -119,18 +121,19 @@ export function createWingScene(container, manifest, payload, opts = {}) {
   // the same pattern already used for strain/deform.
   let colorMode = "strain"; // 'strain' | 'pfire'
   let pfireByCondition = {};
-  function recomputePFire(nldGrad, nldShift) {
+  function recomputePFire(nldGrad, nldShift, staFreq) {
     pfireByCondition = {};
     for (const cond of ["flap", "rotate"]) {
       pfireByCondition[cond] = computePFireAll(
         payload.conditions[cond].strain,
         manifest.encoding,
         nldGrad,
-        nldShift
+        nldShift,
+        staFreq
       );
     }
   }
-  recomputePFire(manifest.encoding.nldGrad, manifest.encoding.nldShift);
+  recomputePFire(manifest.encoding.nldGrad, manifest.encoding.nldShift, manifest.encoding.staFreq);
 
   const gap = chordMm * 1.8;
   const conditions = ["flap", "rotate"];
@@ -164,11 +167,11 @@ export function createWingScene(container, manifest, payload, opts = {}) {
     container.appendChild(label);
     labels[cond] = label;
 
-    sensorMarkers[cond] = payload.optimalSensors.top10.map((sensorIdx1) => {
+    sensorMarkers[cond] = payload.optimalSensors.top10.map((sensorIdx1, rank) => {
       const { chordIdx, spanIdx } = sensorIndexToChordSpan(sensorIdx1, chordElements);
       const markerMesh = new THREE.Mesh(markerGeometry, new THREE.MeshBasicMaterial({ color: 0xffffff }));
       mesh.add(markerMesh); // child of the wing mesh -> inherits its X position automatically
-      return { mesh: markerMesh, chordIdx, spanIdx, sensorIdx1 };
+      return { mesh: markerMesh, chordIdx, spanIdx, sensorIdx1, rank };
     });
   });
 
@@ -207,6 +210,7 @@ export function createWingScene(container, manifest, payload, opts = {}) {
 
     const MARKER_SURFACE_OFFSET = chordMm * 0.03; // lift slightly off the surface to avoid z-fighting
     for (const marker of sensorMarkers[cond]) {
+      if (!marker.mesh.visible) continue;
       const x = (marker.chordIdx / (chordElements - 1) - 0.5) * chordMm;
       const y = (marker.spanIdx / (spanElements - 1)) * spanMm;
       const z = deformFrame[marker.chordIdx][marker.spanIdx] * bendScale + MARKER_SURFACE_OFFSET;
@@ -243,16 +247,15 @@ export function createWingScene(container, manifest, payload, opts = {}) {
   // payload.period_ms is ONE REAL WINGBEAT (e.g. 40ms at flapFrequency=25Hz --
   // a real hawkmoth's actual flap rate). Playing that back at real speed is a
   // blur to human eyes and reads as a static shape, which is what was
-  // reported. This slow-motion factor is a Phase 1 fixed default only --
-  // Phase 4 (§7/§11) makes this an actual user-facing speed control; until
-  // then, stretch one wingbeat to roughly 3 real seconds so the bending is
-  // actually visible.
-  const SLOW_MOTION_FACTOR = 75; // 40ms * 75 ≈ 3s per wingbeat
+  // reported when this was still fixed. BASE_SLOW_MOTION_FACTOR is the 1x
+  // baseline (one wingbeat ~3s); speedMultiplier is the live Phase 4 control
+  // (Plan §7: continuous x0.1-x5), applied as a divisor so higher = faster.
+  const BASE_SLOW_MOTION_FACTOR = 75; // 40ms * 75 ≈ 3s per wingbeat at 1x
+  let speedMultiplier = 1;
 
   let frameIdx = 0;
   let acc = 0;
   let lastT = performance.now();
-  const msPerFrame = (payload.period_ms / payload.frames) * SLOW_MOTION_FACTOR;
 
   let running = true;
   function animate(t) {
@@ -260,6 +263,7 @@ export function createWingScene(container, manifest, payload, opts = {}) {
     const dt = t - lastT;
     lastT = t;
     acc += dt;
+    const msPerFrame = (payload.period_ms / payload.frames) * (BASE_SLOW_MOTION_FACTOR / speedMultiplier);
     while (acc >= msPerFrame) {
       acc -= msPerFrame;
       frameIdx = (frameIdx + 1) % payload.frames;
@@ -292,8 +296,18 @@ export function createWingScene(container, manifest, payload, opts = {}) {
     setColorMode(mode) {
       colorMode = mode;
     },
-    setThreshold(nldGrad, nldShift) {
-      recomputePFire(nldGrad, nldShift);
+    setThreshold(nldGrad, nldShift, staFreq) {
+      recomputePFire(nldGrad, nldShift, staFreq);
+    },
+    setSpeed(multiplier) {
+      speedMultiplier = multiplier;
+    },
+    setSensorCount(n) {
+      for (const cond of conditions) {
+        for (const marker of sensorMarkers[cond]) {
+          marker.mesh.visible = marker.rank < n;
+        }
+      }
     },
   };
 }

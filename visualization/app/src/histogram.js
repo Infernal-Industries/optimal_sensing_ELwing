@@ -83,6 +83,7 @@ export function createHistogram(container, manifest, payload) {
   let sensorIdx = payload.optimalSensors.top1 - 1; // 0-based
   let nldGrad = manifest.encoding.nldGrad;
   let nldShift = manifest.encoding.nldShift;
+  let staFreq = manifest.encoding.staFreq;
 
   function render() {
     svg.textContent = "";
@@ -95,7 +96,7 @@ export function createHistogram(container, manifest, payload) {
     let maxCount = 1;
     for (const cond of ["flap", "rotate"]) {
       const strainRow = payload.conditions[cond].strain[sensorIdx];
-      const pfire = computePFire(strainRow, manifest.encoding, nldGrad, nldShift);
+      const pfire = computePFire(strainRow, manifest.encoding, nldGrad, nldShift, staFreq);
       counts[cond] = samplePSTH(pfire, refPerSamples, N_REPS);
       maxCount = Math.max(maxCount, ...counts[cond]);
     }
@@ -144,14 +145,21 @@ export function createHistogram(container, manifest, payload) {
     // series' true height under the other. Offsetting by a quarter-width
     // each direction gives ~50% overlap -- each bar's outer half is always
     // fully visible (both true heights stay clear), while the shared inner
-    // half blends, reading as "happening at roughly the same time" without
-    // hiding either value. Fixed draw order (flap, then rotate).
+    // half shows whichever series is drawn on top there.
+    //
+    // Bars are opaque (no fill-opacity) and which series draws in front
+    // alternates bin to bin -- flap-in-front on even bins, rotate-in-front
+    // on odd bins -- so neither series is systematically hidden behind the
+    // other across the whole chart; drawing order is per-bin, not fixed
+    // per-series.
     const offset = barW / 4;
-    ["flap", "rotate"].forEach((cond, seriesIdx) => {
-      const dir = seriesIdx === 0 ? -1 : 1; // flap shifts left, rotate shifts right
-      for (let bin = 0; bin < nBins; bin++) {
+    for (let bin = 0; bin < nBins; bin++) {
+      const flapInFront = bin % 2 === 0;
+      const order = flapInFront ? ["rotate", "flap"] : ["flap", "rotate"]; // back first, front last
+      for (const cond of order) {
         const count = counts[cond][bin];
         if (count <= 0) continue;
+        const dir = cond === "flap" ? -1 : 1; // flap shifts left, rotate shifts right
         const barH = (count / maxCount) * plotH;
         const x = PAD.left + bin * binW + (binW - barW) / 2 + dir * offset;
         const y = PAD.top + plotH - barH;
@@ -163,11 +171,10 @@ export function createHistogram(container, manifest, payload) {
             height: barH,
             rx: 1.5,
             fill: COLORS[cond].bar,
-            "fill-opacity": 0.7,
           })
         );
       }
-    });
+    }
   }
 
   render();
@@ -177,9 +184,10 @@ export function createHistogram(container, manifest, payload) {
       sensorIdx = newSensorIdx;
       render();
     },
-    setThreshold(newNldGrad, newNldShift) {
+    setThreshold(newNldGrad, newNldShift, newStaFreq) {
       nldGrad = newNldGrad;
       nldShift = newNldShift;
+      staFreq = newStaFreq;
       render();
     },
   };

@@ -40,15 +40,62 @@ function sigmoid(x) {
 }
 
 /**
+ * Ports the STA filter construction from neuralTransformationOfData.m /
+ * exportForViz.m's encodingConstants() exactly, so `staFreq` (the omega /
+ * filter-frequency control, Plan §7) can be a live client-side knob rather
+ * than fixed to whatever value the MATLAB export used. Cross-checked
+ * numerically against the exported manifest.encoding.staFilt (built with
+ * the same inputs) before this was trusted -- see scripts/ or commit
+ * history for the check.
+ *
+ *   staT = -19:(1000/sampFreq):0
+ *   f(t) = cos(staFreq*(t+staDelay)) * exp(-(t+staDelay)^2/staWidth^2)
+ *   f -= mean(f); if staFreq < 0.1, f = ones(...)
+ *   staFilt = fliplr(f / sqrt(sum(f.^2)) / 0.2003 * 1000/sampFreq)
+ *
+ * @param {number} staFreq
+ * @param {number} staWidth
+ * @param {number} staDelay
+ * @param {number} sampFreq
+ * @returns {number[]} filter taps, ready for convValid (already "pre-flipped"
+ *   to match MATLAB's conv() convention, same as the exported staFilt)
+ */
+export function buildSTAFilter(staFreq, staWidth, staDelay, sampFreq) {
+  const step = 1000 / sampFreq;
+  const nPts = Math.floor(19 / step) + 1;
+  const staT = Array.from({ length: nPts }, (_, i) => -19 + i * step);
+
+  let f = staT.map((t) => Math.cos(staFreq * (t + staDelay)) * Math.exp(-((t + staDelay) ** 2) / staWidth ** 2));
+  const mean = f.reduce((a, b) => a + b, 0) / f.length;
+  f = f.map((v) => v - mean);
+  if (staFreq < 0.1) f = f.map(() => 1);
+
+  const sumSq = f.reduce((a, b) => a + b * b, 0);
+  const k = Math.sqrt(1 / sumSq);
+  const scaled = f.map((v) => (k * v) / 0.2003 * (1000 / sampFreq));
+  return scaled.slice().reverse(); // fliplr
+}
+
+/**
  * Computes P(fire) over time for one sensor's strain row.
  * @param {number[]} strainRow - length strainLeadInFrames + strainFrames (see data.js)
  * @param {object} enc - manifest.encoding
  * @param {number} [nldGrad] - override manifest.encoding.nldGrad (the alpha/slope control)
  * @param {number} [nldShift] - override manifest.encoding.nldShift (the beta/threshold control)
+ * @param {number} [staFreq] - override manifest.encoding.staFreq (the omega/filter-frequency control);
+ *   passing a value different from enc.staFreq rebuilds the filter live via buildSTAFilter
+ *   instead of reusing the exported (fixed) enc.staFilt taps.
  * @returns {number[]} length strainFrames, P(fire) in [0,1]
  */
-export function computePFire(strainRow, enc, nldGrad = enc.nldGrad, nldShift = enc.nldShift) {
-  const filtered = convValid(strainRow, enc.staFilt);
+export function computePFire(
+  strainRow,
+  enc,
+  nldGrad = enc.nldGrad,
+  nldShift = enc.nldShift,
+  staFreq = enc.staFreq
+) {
+  const staFilt = staFreq === enc.staFreq ? enc.staFilt : buildSTAFilter(staFreq, enc.staWidth, enc.staDelay, enc.sampFreq);
+  const filtered = convValid(strainRow, staFilt);
   const norm = enc.normalizeVal * enc.subSamp;
   return filtered.map((v) => sigmoid(nldGrad * (v / norm - nldShift)));
 }
@@ -59,10 +106,11 @@ export function computePFire(strainRow, enc, nldGrad = enc.nldGrad, nldShift = e
  * @param {object} enc - manifest.encoding
  * @param {number} [nldGrad]
  * @param {number} [nldShift]
+ * @param {number} [staFreq]
  * @returns {number[][]} [sensorIdx][frame]
  */
-export function computePFireAll(strain, enc, nldGrad, nldShift) {
-  return strain.map((row) => computePFire(row, enc, nldGrad, nldShift));
+export function computePFireAll(strain, enc, nldGrad, nldShift, staFreq) {
+  return strain.map((row) => computePFire(row, enc, nldGrad, nldShift, staFreq));
 }
 
 /**

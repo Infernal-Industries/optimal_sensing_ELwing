@@ -48,14 +48,15 @@ export function createWing2D(container, manifest, payload, opts = {}) {
   const ctxs = {};
 
   let colorMode = "strain";
+  let sensorCount = 10;
   let pfireByCondition = {};
-  function recomputePFire(nldGrad, nldShift) {
+  function recomputePFire(nldGrad, nldShift, staFreq) {
     pfireByCondition = {};
     for (const cond of ["flap", "rotate"]) {
-      pfireByCondition[cond] = computePFireAll(payload.conditions[cond].strain, manifest.encoding, nldGrad, nldShift);
+      pfireByCondition[cond] = computePFireAll(payload.conditions[cond].strain, manifest.encoding, nldGrad, nldShift, staFreq);
     }
   }
-  recomputePFire(manifest.encoding.nldGrad, manifest.encoding.nldShift);
+  recomputePFire(manifest.encoding.nldGrad, manifest.encoding.nldShift, manifest.encoding.staFreq);
 
   for (const cond of ["flap", "rotate"]) {
     const wrap = document.createElement("div");
@@ -86,9 +87,8 @@ export function createWing2D(container, manifest, payload, opts = {}) {
     });
   }
 
-  const optimalSet = new Set(payload.optimalSensors.top10);
-
   function render(strainFrameIdx) {
+    const optimalSet = payload.optimalSensors.top10.slice(0, sensorCount);
     for (const cond of ["flap", "rotate"]) {
       const ctx = ctxs[cond];
       const strain = payload.conditions[cond].strain;
@@ -128,8 +128,11 @@ export function createWing2D(container, manifest, payload, opts = {}) {
     setColorMode(mode) {
       colorMode = mode;
     },
-    setThreshold(nldGrad, nldShift) {
-      recomputePFire(nldGrad, nldShift);
+    setThreshold(nldGrad, nldShift, staFreq) {
+      recomputePFire(nldGrad, nldShift, staFreq);
+    },
+    setSensorCount(n) {
+      sensorCount = n;
     },
     /** @param {number} frameIdx - index into payload.strainFrames-length arrays */
     setFrame(frameIdx) {

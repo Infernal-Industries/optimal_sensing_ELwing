@@ -233,6 +233,7 @@ export function createTimelines(container, manifest, payload, computePFire) {
   let sensorIdx = payload.optimalSensors.top1 - 1; // 0-based
   let nldGrad = manifest.encoding.nldGrad;
   let nldShift = manifest.encoding.nldShift;
+  let staFreq = manifest.encoding.staFreq;
 
   function msPerStrainSample() {
     return payload.period_ms / payload.strainFrames;
@@ -257,7 +258,7 @@ export function createTimelines(container, manifest, payload, computePFire) {
         if (v > yMax) yMax = v;
       }
 
-      const pfire = computePFire(fullRow, manifest.encoding, nldGrad, nldShift);
+      const pfire = computePFire(fullRow, manifest.encoding, nldGrad, nldShift, staFreq);
       pfireSeries[cond] = pfire.map((v, i) => ({ x: i * dt, y: v }));
     }
 
@@ -275,9 +276,10 @@ export function createTimelines(container, manifest, payload, computePFire) {
       sensorIdx = newSensorIdx;
       recompute();
     },
-    setThreshold(newNldGrad, newNldShift) {
+    setThreshold(newNldGrad, newNldShift, newStaFreq) {
       nldGrad = newNldGrad;
       nldShift = newNldShift;
+      staFreq = newStaFreq;
       recompute();
     },
     /** @param {number} frameMs - current animation time within one wingbeat, in ms */
