@@ -139,17 +139,21 @@ export function createHistogram(container, manifest, payload) {
       svg.appendChild(label);
     }
 
-    // Overlapping (not side-by-side) bars, matching the paper's PSTH style
-    // (Fig 2E) -- both series occupy the same x position per bin at ~65%
-    // opacity, so overlap reads as a blended color rather than two
-    // adjacent bars that could misread as alternating/evenly spaced. Fixed
-    // draw order (flap, then rotate) for a consistent look bin to bin.
-    ["flap", "rotate"].forEach((cond) => {
+    // Half-overlapping bars: fully side-by-side would misread as two evenly
+    // alternating series; fully overlapping (same x) would occlude each
+    // series' true height under the other. Offsetting by a quarter-width
+    // each direction gives ~50% overlap -- each bar's outer half is always
+    // fully visible (both true heights stay clear), while the shared inner
+    // half blends, reading as "happening at roughly the same time" without
+    // hiding either value. Fixed draw order (flap, then rotate).
+    const offset = barW / 4;
+    ["flap", "rotate"].forEach((cond, seriesIdx) => {
+      const dir = seriesIdx === 0 ? -1 : 1; // flap shifts left, rotate shifts right
       for (let bin = 0; bin < nBins; bin++) {
         const count = counts[cond][bin];
         if (count <= 0) continue;
         const barH = (count / maxCount) * plotH;
-        const x = PAD.left + bin * binW + (binW - barW) / 2;
+        const x = PAD.left + bin * binW + (binW - barW) / 2 + dir * offset;
         const y = PAD.top + plotH - barH;
         svg.appendChild(
           svgEl("rect", {
@@ -159,7 +163,7 @@ export function createHistogram(container, manifest, payload) {
             height: barH,
             rx: 1.5,
             fill: COLORS[cond].bar,
-            "fill-opacity": 0.65,
+            "fill-opacity": 0.7,
           })
         );
       }
