@@ -108,7 +108,7 @@ export function createHistogram(container, manifest, payload) {
     const plotW = W - PAD.left - PAD.right;
     const plotH = H - PAD.top - PAD.bottom;
     const binW = plotW / nBins;
-    const barW = Math.max(1, Math.min(24, (binW / 2) * 0.85));
+    const barW = Math.max(1, Math.min(24, binW * 0.85));
 
     for (let i = 0; i <= 2; i++) {
       const val = Math.round((maxCount * i) / 2);
@@ -139,15 +139,28 @@ export function createHistogram(container, manifest, payload) {
       svg.appendChild(label);
     }
 
-    ["flap", "rotate"].forEach((cond, seriesIdx) => {
+    // Overlapping (not side-by-side) bars, matching the paper's PSTH style
+    // (Fig 2E) -- both series occupy the same x position per bin at ~65%
+    // opacity, so overlap reads as a blended color rather than two
+    // adjacent bars that could misread as alternating/evenly spaced. Fixed
+    // draw order (flap, then rotate) for a consistent look bin to bin.
+    ["flap", "rotate"].forEach((cond) => {
       for (let bin = 0; bin < nBins; bin++) {
         const count = counts[cond][bin];
         if (count <= 0) continue;
         const barH = (count / maxCount) * plotH;
-        const x = PAD.left + bin * binW + seriesIdx * (binW / 2) + (binW / 2 - barW) / 2;
+        const x = PAD.left + bin * binW + (binW - barW) / 2;
         const y = PAD.top + plotH - barH;
         svg.appendChild(
-          svgEl("rect", { x, y, width: barW, height: barH, rx: 1.5, fill: COLORS[cond].bar })
+          svgEl("rect", {
+            x,
+            y,
+            width: barW,
+            height: barH,
+            rx: 1.5,
+            fill: COLORS[cond].bar,
+            "fill-opacity": 0.65,
+          })
         );
       }
     });
