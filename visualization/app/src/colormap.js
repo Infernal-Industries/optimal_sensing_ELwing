@@ -23,3 +23,20 @@ export function divergingColor(value, maxAbs) {
   const rgb255 = t < 0 ? lerpRGB(MID, NEG_POLE, -t) : lerpRGB(MID, POS_POLE, t);
   return [rgb255[0] / 255, rgb255[1] / 255, rgb255[2] / 255];
 }
+
+// Sequential colormap for P(fire) -- a probability/magnitude, 0..1, so this
+// is a "magnitude" job per the dataviz skill: one hue, light->dark. Uses
+// the documented default sequential hue (blue, palette.md), sampled at its
+// darkest and near-white steps as the ramp endpoints and lerped between.
+const SEQ_LIGHT = [0xcd, 0xe2, 0xfb]; // step 100
+const SEQ_DARK = [0x0d, 0x36, 0x6b]; // step 700
+
+/**
+ * @param {number} p - P(fire), expected in [0,1]
+ * @returns {[number, number, number]} RGB in 0..1
+ */
+export function sequentialColor(p) {
+  const t = Math.max(0, Math.min(1, p));
+  const rgb255 = lerpRGB(SEQ_LIGHT, SEQ_DARK, t);
+  return [rgb255[0] / 255, rgb255[1] / 255, rgb255[2] / 255];
+}

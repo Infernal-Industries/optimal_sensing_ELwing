@@ -11,11 +11,16 @@
 // Array-shape note (matches MATLAB's jsonencode dimension order exactly):
 //   - deform[frame][chordIdx][spanIdx]   (MATLAB size: payload.frames x chordElements x spanElements)
 //     Downsampled resolution (default 90/wingbeat) -- fine for the 3D animation loop.
-//   - strain[sensorIdx][frame]           (MATLAB size: nSensorLocs x payload.strainFrames)
+//   - strain[sensorIdx][frame]           (MATLAB size: nSensorLocs x (strainLeadInFrames + strainFrames))
 //     NATIVE resolution (== manifest.encoding.sampFreq), NOT downsampled -- deliberately a
 //     different (finer) frame count than `deform`, because encoding.js needs enough time
 //     resolution to reconvolve manifest.encoding.staFilt accurately. Do not assume
 //     strain.length matches payload.frames -- use payload.strainFrames.
+//     IMPORTANT: strain's length is strainLeadInFrames + strainFrames, NOT just
+//     strainFrames -- the extra leading samples are required so encoding.js can compute
+//     a MATLAB-conv('valid')-equivalent convolution against manifest.encoding.staFilt
+//     that covers the ENTIRE displayed wingbeat (strainFrames output samples), not a
+//     truncated one. See encoding.js's convValid().
 //   - optimalSensors.top1  -> number (1-based linear index into the chord x span grid)
 //   - optimalSensors.top5  -> number[5]
 //   - optimalSensors.top10 -> number[10]
@@ -129,9 +134,14 @@ export function validateSetPayload(payload, manifest, label = "payload") {
     typeof payload.strainFrames === "number" && payload.strainFrames > 0,
     `${label}.strainFrames missing or invalid`
   );
+  assert(
+    typeof payload.strainLeadInFrames === "number" && payload.strainLeadInFrames >= 0,
+    `${label}.strainLeadInFrames missing or invalid`
+  );
   assert(typeof payload.period_ms === "number" && payload.period_ms > 0, `${label}.period_ms missing or invalid`);
   const nFrames = payload.frames;
   const nStrainFrames = payload.strainFrames;
+  const nStrainTotal = payload.strainFrames + payload.strainLeadInFrames;
 
   assert(payload.conditions, `${label}.conditions missing`);
   for (const cond of ["flap", "rotate"]) {
@@ -149,10 +159,11 @@ export function validateSetPayload(payload, manifest, label = "payload") {
       `${label}.conditions.${cond}.deform[last][last]`
     );
 
-    // strain[sensorIdx][frame] -- native/encoding resolution (payload.strainFrames), NOT payload.frames
+    // strain[sensorIdx][frame] -- native/encoding resolution; length is
+    // strainLeadInFrames + strainFrames, NOT just strainFrames (see file header).
     isArray(c.strain, nSensorLocs, `${label}.conditions.${cond}.strain`);
-    isNumberArray(c.strain[0], nStrainFrames, `${label}.conditions.${cond}.strain[0]`);
-    isNumberArray(c.strain[nSensorLocs - 1], nStrainFrames, `${label}.conditions.${cond}.strain[last]`);
+    isNumberArray(c.strain[0], nStrainTotal, `${label}.conditions.${cond}.strain[0]`);
+    isNumberArray(c.strain[nSensorLocs - 1], nStrainTotal, `${label}.conditions.${cond}.strain[last]`);
   }
 
   assert(payload.optimalSensors, `${label}.optimalSensors missing`);

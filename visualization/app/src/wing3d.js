@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { divergingColor } from "./colormap.js";
+import { divergingColor, sequentialColor } from "./colormap.js";
+import { computePFireAll } from "./encoding.js";
 
 // Deform values are in the Euler-Lagrange model's native units (cm-scale
 // displacements on a wing a few cm across) -- real bending amplitude is
@@ -74,9 +75,13 @@ function maxAbsStrain(payload) {
  * @param {HTMLElement} container
  * @param {object} manifest - validated manifest.json
  * @param {object} payload - validated set_*.json payload
- * @returns {{dispose: () => void}}
+ * @param {{onFrame?: (frameIdx:number, timeMs:number) => void}} [opts] -
+ *   onFrame is invoked once per rendered frame with the current animation
+ *   frame index and the elapsed time (ms) within the wingbeat, so callers
+ *   (timelines.js's playhead) can stay in sync without polling.
+ * @returns {{dispose: () => void, setColorMode: (mode:'strain'|'pfire') => void, setThreshold: (nldGrad:number, nldShift:number) => void}}
  */
-export function createWingScene(container, manifest, payload) {
+export function createWingScene(container, manifest, payload, opts = {}) {
   const { chordElements, spanElements, chord_mm: chordMm, span_mm: spanMm } = manifest.grid;
 
   const scene = new THREE.Scene();
@@ -104,6 +109,27 @@ export function createWingScene(container, manifest, payload) {
 
   const bendScale = (TARGET_BEND_FRACTION_OF_SPAN * spanMm) / maxAbsDeform(payload);
   const strainBound = maxAbsStrain(payload);
+
+  // P(fire) recomputation is cheap enough (~1300 sensors x ~40 conv taps x 2
+  // conditions) to redo whenever the threshold changes, but NOT cheap enough
+  // to redo every rendered frame (~60fps) -- so it's precomputed here (and
+  // on every setThreshold call) into a plain [sensorIdx][frame] array per
+  // condition, and the per-frame render loop below just indexes into it,
+  // the same pattern already used for strain/deform.
+  let colorMode = "strain"; // 'strain' | 'pfire'
+  let pfireByCondition = {};
+  function recomputePFire(nldGrad, nldShift) {
+    pfireByCondition = {};
+    for (const cond of ["flap", "rotate"]) {
+      pfireByCondition[cond] = computePFireAll(
+        payload.conditions[cond].strain,
+        manifest.encoding,
+        nldGrad,
+        nldShift
+      );
+    }
+  }
+  recomputePFire(manifest.encoding.nldGrad, manifest.encoding.nldShift);
 
   const gap = chordMm * 1.8;
   const conditions = ["flap", "rotate"];
@@ -136,8 +162,11 @@ export function createWingScene(container, manifest, payload) {
     const posAttr = mesh.geometry.getAttribute("position");
     const colorAttr = mesh.geometry.getAttribute("color");
     const deformFrame = payload.conditions[cond].deform[frameIdx];
+    // strain/pfire share the same (post-convolution) index space -- both
+    // are payload.strainFrames long -- so one index maps to both.
     const strainFrameIdx = Math.floor((frameIdx * payload.strainFrames) / payload.frames);
     const strain = payload.conditions[cond].strain;
+    const pfire = pfireByCondition[cond];
 
     for (let ci = 0; ci < chordElements; ci++) {
       for (let si = 0; si < spanElements; si++) {
@@ -150,8 +179,10 @@ export function createWingScene(container, manifest, payload) {
         // same order as `idx` above, which is this file's own vertex-buffer
         // convention (span fastest) -- these two indices are independent.
         const sensorIdx = si * chordElements + ci;
-        const strainVal = strain[sensorIdx][strainFrameIdx];
-        const [r, g, b] = divergingColor(strainVal, strainBound);
+        const [r, g, b] =
+          colorMode === "pfire"
+            ? sequentialColor(pfire[sensorIdx][strainFrameIdx])
+            : divergingColor(strain[sensorIdx][strainFrameIdx], strainBound);
         colorAttr.setXYZ(idx, r, g, b);
       }
     }
@@ -210,6 +241,14 @@ export function createWingScene(container, manifest, payload) {
     controls.update();
     updateLabelPositions();
     renderer.render(scene, camera);
+    if (opts.onFrame) {
+      // Real (non-slow-motion) time within the wingbeat, matching
+      // payload.period_ms / strain sample spacing -- so timelines.js's
+      // playhead (drawn on a real-ms x-axis) stays in sync with what the
+      // 3D scene is currently showing, independent of SLOW_MOTION_FACTOR.
+      const realTimeMs = (frameIdx / payload.frames) * payload.period_ms;
+      opts.onFrame(frameIdx, realTimeMs);
+    }
     requestAnimationFrame(animate);
   }
   conditions.forEach((cond) => applyFrame(cond, 0));
@@ -222,6 +261,12 @@ export function createWingScene(container, manifest, payload) {
       renderer.dispose();
       Object.values(labels).forEach((l) => l.remove());
       renderer.domElement.remove();
+    },
+    setColorMode(mode) {
+      colorMode = mode;
+    },
+    setThreshold(nldGrad, nldShift) {
+      recomputePFire(nldGrad, nldShift);
     },
   };
 }

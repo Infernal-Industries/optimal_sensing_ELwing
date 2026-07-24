@@ -8,14 +8,40 @@
   html, body { margin: 0; height: 100%; background: #0b0e14; color: #e6e6e6; font-family: system-ui, sans-serif; }
   #app { display: flex; flex-direction: column; height: 100%; }
   #status { padding: 0.5rem 1rem; font-size: 0.85rem; color: #9aa4b2; }
-  #canvas-wrap { flex: 1; position: relative; }
+  #canvas-wrap { flex: 1; min-height: 260px; position: relative; }
   canvas { display: block; }
+  #controls {
+    display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap;
+    padding: 0.5rem 1rem; background: #12151c; border-top: 1px solid #2c2c2a;
+    font-size: 0.8rem; color: #c3c2b7;
+  }
+  #controls label { display: flex; align-items: center; gap: 0.4rem; }
+  #controls input[type="range"] { width: 140px; }
+  #timelines-wrap {
+    display: flex; gap: 1rem; padding: 0.5rem 1rem 1rem; background: #12151c;
+    flex-wrap: wrap;
+  }
+  #timelines-wrap > div { flex: 1; min-width: 320px; }
 </style>
 </head>
 <body>
 <div id="app">
   <div id="status">Loading…</div>
   <div id="canvas-wrap"></div>
+  <div id="controls">
+    <label>
+      Color by:
+      <select id="color-mode">
+        <option value="strain">Strain</option>
+        <option value="pfire">P(fire)</option>
+      </select>
+    </label>
+    <label>
+      Neural threshold (β): <span id="beta-value"></span>
+      <input type="range" id="beta-slider" min="0.05" max="0.7" step="0.01" />
+    </label>
+  </div>
+  <div id="timelines-wrap"></div>
 </div>
 <script type="module" src="/src/main.js"></script>
 </body>

@@ -236,12 +236,32 @@ if iEnd > totalTimePts
         Pars.simEnd, totalTimePts, iEnd);
 end
 
+% `strain` additionally needs a lead-in before iStart: encoding.js (Phase 2)
+% must convolve it with manifest.encoding.staFilt using MATLAB's `conv(x,
+% staFilt,'valid')` semantics, which needs (filterTaps-1) samples of
+% history before the first output point to produce a full-length,
+% non-truncated result covering the whole displayed wingbeat -- exactly
+% the same reason neuralTransformationOfData.m runs the convolution over
+% the full continuous simulation rather than an isolated window. Without
+% this, the first ~(filterTaps-1) samples of P(fire) would be wrong or
+% would have to be dropped.
+enc = encodingConstants(Pars);
+leadInSamples = numel(enc.staFilt) - 1;
+strainStart = iStart - leadInSamples;
+if strainStart < 1
+    error('exportForViz:leadInTooLong', ...
+        ['Not enough simulated time before the display window for the filter ' ...
+         'lead-in (%d samples needed, window starts at index %d). Increase ' ...
+         'Pars.simStartup.'], leadInSamples, iStart);
+end
+
 animFrameIdx = round(linspace(iStart, iEnd, opt.nFrames + 1));
 animFrameIdx(end) = [];  % last frame loops back into the first frame; avoid duplicate
 
 payload = struct();
 payload.frames = opt.nFrames;               % deform (animation) resolution
-payload.strainFrames = nativeStepsPerPeriod; % strain (encoding/timeline) resolution -- native, unresampled
+payload.strainFrames = nativeStepsPerPeriod; % strain DISPLAY resolution (post-convolution length)
+payload.strainLeadInFrames = leadInSamples;  % extra samples prepended to strain, for valid convolution
 payload.period_ms = period_s * 1000;
 payload.conditions = struct();
 for c = 1:2
@@ -250,8 +270,11 @@ for c = 1:2
     deform_c = raw.(cond).deform;   % nTime x chordElements x spanElements
     payload.conditions.(cond).deform = single(deform_c(animFrameIdx, :, :));
 
+    % strain array length = strainLeadInFrames + strainFrames; convolving
+    % the full array 'valid' with staFilt yields exactly strainFrames output
+    % samples, aligned 1:1 with the displayed wingbeat.
     strain_c = raw.(cond).strain;   % nSensorLocs x nTime
-    payload.conditions.(cond).strain = single(strain_c(:, iStart:iEnd));
+    payload.conditions.(cond).strain = single(strain_c(:, strainStart:iEnd));
 end
 
 payload.optimalSensors = struct( ...
@@ -382,6 +405,7 @@ enc = struct( ...
     'staWidth', Pars.staWidth, ...
     'staDelay', Pars.staDelay, ...
     'normalizeVal', Pars.normalizeVal, ...
+    'subSamp', Pars.subSamp, ...
     'staFilt', staFilt);
 end
 
