@@ -1,0 +1,54 @@
+name: Deploy visualization to GitHub Pages
+
+# Continuous deployment starting Phase 1 (VISUALIZATION_PLAN.md §8, §11):
+# every push to main rebuilds and redeploys, so the live site tracks the
+# repo phase by phase rather than only being built once at the end.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "visualization/app/**"
+      - "visualization/public/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: visualization/app/package-lock.json
+      - name: Install dependencies
+        working-directory: visualization/app
+        run: npm ci
+      - name: Build
+        working-directory: visualization/app
+        run: npm run build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: visualization/app/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

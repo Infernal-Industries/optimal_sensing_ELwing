@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Phase 0 — schema validation</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 780px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.25rem; }
+  #log { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 0.85rem; }
+  .ok { color: #1a7f37; }
+  .fail { color: #cf222e; font-weight: bold; }
+  .hint { color: #666; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<h1>Phase 0 — exportForViz.m schema validation</h1>
+<p class="hint">
+  Serve this directory over HTTP (fetch of local JSON needs a server, not
+  <code>file://</code>) — from the <code>visualization/</code> folder run:<br />
+  <code>python3 -m http.server 8000</code><br />
+  then open <a href="http://localhost:8000/app/validate.html">http://localhost:8000/app/validate.html</a>.
+</p>
+<div id="log">Loading…</div>
+
+<script type="module">
+  import { loadManifest, loadSet, SchemaError } from "./src/data.js";
+
+  const log = document.getElementById("log");
+  function line(text, cls) {
+    const span = document.createElement("div");
+    if (cls) span.className = cls;
+    span.textContent = text;
+    log.appendChild(span);
+  }
+
+  async function run() {
+    log.textContent = "";
+    const baseUrl = "../public/data";
+
+    let manifest;
+    try {
+      manifest = await loadManifest(baseUrl);
+      line(`✓ manifest.json valid — grid ${manifest.grid.chordElements}×${manifest.grid.spanElements}, ${manifest.sets.length} set(s), quick=${manifest.quick}`, "ok");
+    } catch (e) {
+      line(`✗ manifest.json FAILED: ${e.message}`, "fail");
+      if (!(e instanceof SchemaError)) console.error(e);
+      return;
+    }
+
+    let passed = 0;
+    for (const set of manifest.sets) {
+      try {
+        const payload = await loadSet(baseUrl, manifest, set.file);
+        line(
+          `✓ ${set.file} valid — ${payload.frames} frames, ` +
+          `top1 sensor=${payload.optimalSensors.top1}, ` +
+          `acc(10 sensors)=${payload.accuracyBySensorCount[9].toFixed(3)}`,
+          "ok"
+        );
+        passed++;
+      } catch (e) {
+        line(`✗ ${set.file} FAILED: ${e.message}`, "fail");
+        if (!(e instanceof SchemaError)) console.error(e);
+      }
+    }
+
+    line("");
+    line(`${passed}/${manifest.sets.length} set(s) passed schema validation.`, passed === manifest.sets.length ? "ok" : "fail");
+    if (manifest.quick) {
+      line("NOTE: manifest.quick=true — this is Phase-0 schema-check data only, not scientifically valid.", "hint");
+    }
+  }
+
+  run();
+</script>
+</body>
+</html>

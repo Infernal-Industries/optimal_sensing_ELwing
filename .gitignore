@@ -1,3 +1,13 @@
 simulated_wing_data/
 *.asv
 PlateODE*
+LLM_context/
+
+# visualization/public/data/ is INTENTIONALLY tracked, not ignored, as of
+# Phase 1 -- continuous deployment (VISUALIZATION_PLAN.md §11) means the
+# live site needs data present from Phase 1 onward, even the low-fidelity
+# Phase 0 quick-mode placeholder. It's clearly labeled as such in the UI
+# (manifest.quick=true) and gets wholesale-replaced by the real Medium-grid
+# export in Phase 5. See visualization/README.md.
+visualization/app/node_modules/
+visualization/app/dist/
