@@ -182,10 +182,19 @@ export function createWingScene(container, manifest, payload) {
     });
   }
 
+  // payload.period_ms is ONE REAL WINGBEAT (e.g. 40ms at flapFrequency=25Hz --
+  // a real hawkmoth's actual flap rate). Playing that back at real speed is a
+  // blur to human eyes and reads as a static shape, which is what was
+  // reported. This slow-motion factor is a Phase 1 fixed default only --
+  // Phase 4 (§7/§11) makes this an actual user-facing speed control; until
+  // then, stretch one wingbeat to roughly 3 real seconds so the bending is
+  // actually visible.
+  const SLOW_MOTION_FACTOR = 75; // 40ms * 75 ≈ 3s per wingbeat
+
   let frameIdx = 0;
   let acc = 0;
   let lastT = performance.now();
-  const msPerFrame = payload.period_ms / payload.frames;
+  const msPerFrame = (payload.period_ms / payload.frames) * SLOW_MOTION_FACTOR;
 
   let running = true;
   function animate(t) {
