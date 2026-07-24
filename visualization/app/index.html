@@ -22,6 +22,11 @@
     flex-wrap: wrap;
   }
   #timelines-wrap > div { flex: 1; min-width: 320px; }
+  #wing2d-wrap {
+    padding: 0.5rem 1rem 1rem; background: #0b0e14; border-top: 1px solid #2c2c2a;
+  }
+  #wing2d-title { color: #c3c2b7; font: 0.75rem system-ui, sans-serif; margin-bottom: 4px; }
+  #histogram-wrap { padding: 0.5rem 1rem 1rem; background: #0b0e14; }
 </style>
 </head>
 <body>
@@ -42,6 +47,11 @@
     </label>
   </div>
   <div id="timelines-wrap"></div>
+  <div id="wing2d-wrap">
+    <div id="wing2d-title">2D sensor map (click a cell to inspect that sensor's timeline)</div>
+    <div id="wing2d-canvases"></div>
+  </div>
+  <div id="histogram-wrap"></div>
 </div>
 <script type="module" src="/src/main.js"></script>
 </body>

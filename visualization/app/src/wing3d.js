@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { divergingColor, sequentialColor } from "./colormap.js";
+import { divergingColor, sequentialColor, firingIndicatorColor } from "./colormap.js";
 import { computePFireAll } from "./encoding.js";
+import { sensorIndexToChordSpan } from "./data.js";
 
 // Deform values are in the Euler-Lagrange model's native units (cm-scale
 // displacements on a wing a few cm across) -- real bending amplitude is
@@ -135,6 +136,13 @@ export function createWingScene(container, manifest, payload, opts = {}) {
   const conditions = ["flap", "rotate"];
   const meshes = {};
   const labels = {};
+  const sensorMarkers = {}; // cond -> array of {mesh, chordIdx, spanIdx, sensorIdx1}
+
+  // Shared geometry/material template for optimal-sensor markers. Per
+  // Requirements.pdf Req #1, these ALWAYS show live P(fire) (bright =
+  // firing) regardless of the wing mesh's own strain/P(fire) color-mode
+  // toggle -- that toggle only affects the full-mesh heatmap.
+  const markerGeometry = new THREE.SphereGeometry(chordMm * 0.06, 12, 12);
 
   conditions.forEach((cond, i) => {
     const geometry = buildWingGeometry(chordElements, spanElements, chordMm, spanMm);
@@ -155,6 +163,13 @@ export function createWingScene(container, manifest, payload, opts = {}) {
       "position:absolute;top:0;left:0;color:#c3c2b7;font:0.8rem system-ui,sans-serif;pointer-events:none;";
     container.appendChild(label);
     labels[cond] = label;
+
+    sensorMarkers[cond] = payload.optimalSensors.top10.map((sensorIdx1) => {
+      const { chordIdx, spanIdx } = sensorIndexToChordSpan(sensorIdx1, chordElements);
+      const markerMesh = new THREE.Mesh(markerGeometry, new THREE.MeshBasicMaterial({ color: 0xffffff }));
+      mesh.add(markerMesh); // child of the wing mesh -> inherits its X position automatically
+      return { mesh: markerMesh, chordIdx, spanIdx, sensorIdx1 };
+    });
   });
 
   function applyFrame(cond, frameIdx) {
@@ -189,6 +204,18 @@ export function createWingScene(container, manifest, payload, opts = {}) {
     posAttr.needsUpdate = true;
     colorAttr.needsUpdate = true;
     mesh.geometry.computeVertexNormals();
+
+    const MARKER_SURFACE_OFFSET = chordMm * 0.03; // lift slightly off the surface to avoid z-fighting
+    for (const marker of sensorMarkers[cond]) {
+      const x = (marker.chordIdx / (chordElements - 1) - 0.5) * chordMm;
+      const y = (marker.spanIdx / (spanElements - 1)) * spanMm;
+      const z = deformFrame[marker.chordIdx][marker.spanIdx] * bendScale + MARKER_SURFACE_OFFSET;
+      marker.mesh.position.set(x, y, z);
+      // Always P(fire)-colored (Requirements.pdf Req #1), independent of
+      // the wing mesh's own strain/P(fire) colorMode toggle.
+      const [r, g, b] = firingIndicatorColor(pfire[marker.sensorIdx1 - 1][strainFrameIdx]);
+      marker.mesh.material.color.setRGB(r, g, b);
+    }
   }
 
   function resize() {

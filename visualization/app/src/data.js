@@ -184,4 +184,19 @@ export function validateSetPayload(payload, manifest, label = "payload") {
   }
 }
 
+/**
+ * Converts a MATLAB 1-based linear sensor index (column-major over
+ * [chordElements, spanElements], i.e. chordElements varies fastest -- see
+ * wing3d.js's indexing comment / ind2sub usage in exportForViz.m) to
+ * 0-based {chordIdx, spanIdx} grid coordinates. Shared by wing3d.js and
+ * wing2d.js so both overlay optimal sensors at the same physical location.
+ * @param {number} idx1 - 1-based linear sensor index
+ * @param {number} chordElements
+ * @returns {{chordIdx: number, spanIdx: number}}
+ */
+export function sensorIndexToChordSpan(idx1, chordElements) {
+  const idx0 = idx1 - 1;
+  return { chordIdx: idx0 % chordElements, spanIdx: Math.floor(idx0 / chordElements) };
+}
+
 export { SchemaError };

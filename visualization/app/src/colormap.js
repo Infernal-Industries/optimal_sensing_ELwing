@@ -40,3 +40,24 @@ export function sequentialColor(p) {
   const rgb255 = lerpRGB(SEQ_LIGHT, SEQ_DARK, t);
   return [rgb255[0] / 255, rgb255[1] / 255, rgb255[2] / 255];
 }
+
+// Optimal-sensor marker color -- deliberately NOT the sequential heatmap
+// ramp above. Requirements.pdf Req #1 specifies markers change color with
+// "bright = firing", but palette.md's sequential ramp goes light->dark for
+// low->high magnitude -- correct for a heatmap on a light surface, but on
+// this app's dark background a "high value = dark" marker nearly
+// disappears, the opposite of the intended effect. Markers are a small
+// discrete indicator (more "LED on/off" than continuous heatmap), so this
+// uses a dim/muted -> bright white indicator ramp instead.
+const MARKER_OFF = [0x52, 0x51, 0x4e]; // secondary ink -- dim, reads as "off"
+const MARKER_ON = [0xff, 0xff, 0xff]; // bright white -- reads as "firing"
+
+/**
+ * @param {number} p - P(fire), expected in [0,1]
+ * @returns {[number, number, number]} RGB in 0..1
+ */
+export function firingIndicatorColor(p) {
+  const t = Math.max(0, Math.min(1, p));
+  const rgb255 = lerpRGB(MARKER_OFF, MARKER_ON, t);
+  return [rgb255[0] / 255, rgb255[1] / 255, rgb255[2] / 255];
+}
