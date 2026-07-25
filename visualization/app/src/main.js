@@ -27,64 +27,42 @@ async function main() {
   try {
     const manifest = await loadManifest("data");
     const firstSet = manifest.sets[0];
-    statusEl.textContent = `Loading ${firstSet.id}…`;
-
-    const payload = await loadSet("data", manifest, firstSet.file);
 
     const quickNote = manifest.quick
       ? " — Phase 0 quick-mode data (schema check only, not scientifically valid)"
       : "";
-    statusEl.textContent = `${firstSet.id} · stiffness factor ${firstSet.stiffnessFactor} · axis ${firstSet.axis}${quickNote}`;
 
-    const timelines = createTimelines(timelinesWrap, manifest, payload, computePFire);
-    const histogram = createHistogram(histogramWrap, manifest, payload);
-
-    const wing2d = createWing2D(wing2dCanvases, manifest, payload, {
-      onSelectSensor: (sensorIdx1) => {
-        timelines.setSensor(sensorIdx1 - 1);
-        histogram.setSensor(sensorIdx1 - 1);
-      },
-    });
-
-    const wing = createWingScene(canvasWrap, manifest, payload, {
-      onFrame: (frameIdx, timeMs) => {
-        timelines.setPlayhead(timeMs);
-        const strainFrameIdx = Math.floor((frameIdx * payload.strainFrames) / payload.frames);
-        wing2d.setFrame(strainFrameIdx);
-      },
-    });
-
-    colorModeSelect.addEventListener("change", () => {
-      wing.setColorMode(colorModeSelect.value);
-      wing2d.setColorMode(colorModeSelect.value);
-    });
-
-    // --- Axis: discrete, precomputed only (Plan §7 -- "no interpolation,
-    // pick one"). Only `yaw` is precomputed right now; picking anything
-    // else can't load real data (no Tier 2 backend, no other precomputed
-    // axis yet) so it snaps back with a notice rather than silently no-op.
-    axisSelect.value = firstSet.axis;
-    axisSelect.addEventListener("change", () => {
-      if (axisSelect.value !== firstSet.axis) {
-        statusEl.textContent = `"${axisSelect.value}" axis isn't precomputed yet (only "${firstSet.axis}" is) — showing ${firstSet.axis} data. ${quickNote}`;
-        axisSelect.value = firstSet.axis;
-      }
-    });
-
-    // --- β / α / ω / speed: fully client-computable (Plan §7), so the
-    // dual control is unrestricted -- no backend, no resolution ladder,
-    // every change recomputes live across all four consumers that derive
-    // P(fire) (wing, wing2d, timelines, histogram).
+    // --- β/α/ω live-threshold state persists across dataset reloads (stiffness/axis
+    // switches), so switching sets keeps whatever threshold the user dialed in.
     let nldShift = manifest.encoding.nldShift;
     let nldGrad = manifest.encoding.nldGrad;
     let staFreq = manifest.encoding.staFreq;
+    let sensorCount = 10;
 
+    // wing/wing2d/timelines/histogram are reassigned on every dataset (re)load --
+    // declared with `let` so closures created below (pushThreshold, the sensor-count
+    // control, wing's onFrame callback) always see the current instances, not whichever
+    // ones existed at closure-creation time.
+    let wing, wing2d, timelines, histogram, currentSet, currentPayload;
+
+    // Heavy: computePFireAll recomputes P(fire) for all ~1300 sensors x 2 conditions
+    // in both wing3d.js and wing2d.js. The threshold sliders fire an 'input' event per
+    // pixel of drag, so without coalescing this ran dozens of times per animation frame
+    // -- especially costly with Phase 5's real (native-resolution) strain arrays, much
+    // larger than Phase 0-4's quick-mode placeholder. Collapse to at most one recompute
+    // per animation frame.
+    let thresholdPending = false;
     function pushThreshold() {
-      wing.setThreshold(nldGrad, nldShift, staFreq);
-      timelines.setThreshold(nldGrad, nldShift, staFreq);
-      wing2d.setThreshold(nldGrad, nldShift, staFreq);
-      histogram.setThreshold(nldGrad, nldShift, staFreq);
-      updateAccuracyNotice();
+      if (thresholdPending) return;
+      thresholdPending = true;
+      requestAnimationFrame(() => {
+        thresholdPending = false;
+        wing.setThreshold(nldGrad, nldShift, staFreq);
+        timelines.setThreshold(nldGrad, nldShift, staFreq);
+        wing2d.setThreshold(nldGrad, nldShift, staFreq);
+        histogram.setThreshold(nldGrad, nldShift, staFreq);
+        updateAccuracyNotice();
+      });
     }
 
     function updateAccuracyNotice() {
@@ -96,6 +74,79 @@ async function main() {
         ? ""
         : `Approximate: the optimal-sensor overlay & this accuracy figure were computed by SSPOC (MATLAB) at β=${manifest.encoding.nldShift}, α=${manifest.encoding.nldGrad}, ω=${manifest.encoding.staFreq} — they don't update with these live β/α/ω controls (that would need re-running SSPOC, a Tier 2 job).`;
     }
+
+    // --- Loads (or reloads, on stiffness/axis change) one precomputed set. Tears down
+    // the previous instances first: wing3d.js runs a persistent requestAnimationFrame
+    // loop tied to its own WebGL context, so it needs an explicit dispose(); the other
+    // three modules have no persistent loop, so clearing their containers is enough.
+    async function loadAndMount(setEntry) {
+      statusEl.textContent = `Loading ${setEntry.id}…`;
+      const payload = await loadSet("data", manifest, setEntry.file);
+      currentSet = setEntry;
+      currentPayload = payload;
+
+      wing?.dispose();
+      canvasWrap.innerHTML = "";
+      timelinesWrap.innerHTML = "";
+      wing2dCanvases.innerHTML = "";
+      histogramWrap.innerHTML = "";
+
+      statusEl.textContent = `${setEntry.id} · stiffness factor ${setEntry.stiffnessFactor} · axis ${setEntry.axis}${quickNote}`;
+
+      timelines = createTimelines(timelinesWrap, manifest, payload, computePFire);
+      histogram = createHistogram(histogramWrap, manifest, payload);
+
+      wing2d = createWing2D(wing2dCanvases, manifest, payload, {
+        onSelectSensor: (sensorIdx1) => {
+          timelines.setSensor(sensorIdx1 - 1);
+          histogram.setSensor(sensorIdx1 - 1);
+        },
+      });
+
+      wing = createWingScene(canvasWrap, manifest, payload, {
+        onFrame: (frameIdx, timeMs) => {
+          timelines.setPlayhead(timeMs);
+          const strainFrameIdx = Math.floor((frameIdx * payload.strainFrames) / payload.frames);
+          wing2d.setFrame(strainFrameIdx);
+        },
+      });
+
+      wing.setColorMode(colorModeSelect.value);
+      wing2d.setColorMode(colorModeSelect.value);
+      wing.setThreshold(nldGrad, nldShift, staFreq);
+      timelines.setThreshold(nldGrad, nldShift, staFreq);
+      wing2d.setThreshold(nldGrad, nldShift, staFreq);
+      histogram.setThreshold(nldGrad, nldShift, staFreq);
+      wing.setSensorCount(sensorCount);
+      wing2d.setSensorCount(sensorCount);
+      accuracyN.textContent = String(sensorCount);
+      accuracyValue.textContent = `${(payload.accuracyBySensorCount[sensorCount - 1] * 100).toFixed(0)}%`;
+      updateAccuracyNotice();
+    }
+
+    await loadAndMount(firstSet);
+
+    colorModeSelect.addEventListener("change", () => {
+      wing.setColorMode(colorModeSelect.value);
+      wing2d.setColorMode(colorModeSelect.value);
+    });
+
+    // --- Axis: discrete, precomputed only (Plan §7 -- "no interpolation, pick one").
+    // Phase 5's Medium grid precomputes all three axes at every stiffness value, so
+    // switching axis just reloads the matching precomputed set at the current
+    // stiffness factor.
+    axisSelect.value = firstSet.axis;
+    axisSelect.addEventListener("change", () => {
+      const match = manifest.sets.find(
+        (s) => s.axis === axisSelect.value && s.stiffnessFactor === currentSet.stiffnessFactor
+      );
+      if (!match) {
+        statusEl.textContent = `"${axisSelect.value}" axis isn't precomputed at stiffness factor ${currentSet.stiffnessFactor} — showing ${currentSet.axis} data. ${quickNote}`;
+        axisSelect.value = currentSet.axis;
+        return;
+      }
+      loadAndMount(match);
+    });
 
     createLiveDualControl(paramControls, {
       label: "Neural threshold (β)",
@@ -144,7 +195,7 @@ async function main() {
     // --- Sensor count: bounded by data availability (only top-10 exported),
     // not a resolution ladder -- both bar and text stay 1-10.
     accuracyN.textContent = "10";
-    accuracyValue.textContent = `${(payload.accuracyBySensorCount[9] * 100).toFixed(0)}%`;
+    accuracyValue.textContent = `${(currentPayload.accuracyBySensorCount[9] * 100).toFixed(0)}%`;
     createLiveDualControl(paramControls, {
       label: "Sensor count shown",
       min: 1,
@@ -153,27 +204,31 @@ async function main() {
       value: 10,
       format: (v) => String(Math.round(v)),
       onChange: (v) => {
-        const n = Math.round(v);
-        wing.setSensorCount(n);
-        wing2d.setSensorCount(n);
-        accuracyN.textContent = String(n);
-        accuracyValue.textContent = `${(payload.accuracyBySensorCount[n - 1] * 100).toFixed(0)}%`;
+        sensorCount = Math.round(v);
+        wing.setSensorCount(sensorCount);
+        wing2d.setSensorCount(sensorCount);
+        accuracyN.textContent = String(sensorCount);
+        accuracyValue.textContent = `${(currentPayload.accuracyBySensorCount[sensorCount - 1] * 100).toFixed(0)}%`;
       },
     });
 
-    // --- Wing stiffness E: the resolution-ladder case (Plan §7). Only one
-    // stiffness factor is precomputed right now, so this mostly
-    // demonstrates the snap-to-nearest + notify mechanism -- typing
-    // anything else has no Tier 2 backend to defer to yet, so it always
-    // snaps back to the single available point with an explanatory notice.
+    // --- Wing stiffness E: the resolution-ladder case (Plan §7). Phase 5's Medium
+    // grid precomputes 10 stiffness values (deduped here -- manifest.sets has one
+    // entry per axis, so raw stiffnessFactor values repeat 3x) at the current axis;
+    // picking a grid point reloads the matching precomputed set.
+    const uniqueStiffness = [...new Set(manifest.sets.map((s) => s.stiffnessFactor))];
     createResolutionLadderControl(paramControls, {
       label: "Wing stiffness factor (E)",
-      points: manifest.sets.map((s) => s.stiffnessFactor),
+      points: uniqueStiffness,
       value: firstSet.stiffnessFactor,
       floor: STIFFNESS_FLOOR,
-      onChange: () => {
-        // No-op beyond the control's own notice: only one precomputed set
-        // exists, so there's nothing further to reload yet (Phase 5+).
+      onChange: (v) => {
+        const match = manifest.sets.find((s) => s.stiffnessFactor === v && s.axis === currentSet.axis);
+        if (!match) {
+          statusEl.textContent = `Stiffness factor ${v} isn't precomputed at axis "${currentSet.axis}" — showing the previous set. ${quickNote}`;
+          return;
+        }
+        loadAndMount(match);
       },
     });
   } catch (err) {
