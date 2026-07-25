@@ -103,7 +103,7 @@ export function createHistogram(container, manifest, payload) {
 
     note.textContent =
       `Sensor #${sensorIdx + 1}, ${N_REPS} simulated wingbeats per condition (client-side, refractory period ` +
-      `${manifest.encoding.refPer}ms). Phase 0/1 quick-mode data: not scientifically valid, illustrates the mechanism only.`;
+      `${manifest.encoding.refPer}ms), spike trains sampled from the real P(fire) curve above.`;
 
     const nBins = counts.flap.length;
     const plotW = W - PAD.left - PAD.right;
@@ -140,28 +140,14 @@ export function createHistogram(container, manifest, payload) {
       svg.appendChild(label);
     }
 
-    // Half-overlapping bars: fully side-by-side would misread as two evenly
-    // alternating series; fully overlapping (same x) would occlude each
-    // series' true height under the other. Offsetting by a quarter-width
-    // each direction gives ~50% overlap -- each bar's outer half is always
-    // fully visible (both true heights stay clear), while the shared inner
-    // half shows whichever series is drawn on top there.
-    //
-    // Bars are opaque (no fill-opacity) and which series draws in front
-    // alternates bin to bin -- flap-in-front on even bins, rotate-in-front
-    // on odd bins -- so neither series is systematically hidden behind the
-    // other across the whole chart; drawing order is per-bin, not fixed
-    // per-series.
-    const offset = barW / 4;
+    // Fully overlapping bars (same x for both series), each semi-transparent
+    // so both true heights stay visible through the other.
     for (let bin = 0; bin < nBins; bin++) {
-      const flapInFront = bin % 2 === 0;
-      const order = flapInFront ? ["rotate", "flap"] : ["flap", "rotate"]; // back first, front last
-      for (const cond of order) {
+      for (const cond of ["flap", "rotate"]) {
         const count = counts[cond][bin];
         if (count <= 0) continue;
-        const dir = cond === "flap" ? -1 : 1; // flap shifts left, rotate shifts right
         const barH = (count / maxCount) * plotH;
-        const x = PAD.left + bin * binW + (binW - barW) / 2 + dir * offset;
+        const x = PAD.left + bin * binW + (binW - barW) / 2;
         const y = PAD.top + plotH - barH;
         svg.appendChild(
           svgEl("rect", {
@@ -171,6 +157,7 @@ export function createHistogram(container, manifest, payload) {
             height: barH,
             rx: 1.5,
             fill: COLORS[cond].bar,
+            "fill-opacity": 0.6,
           })
         );
       }

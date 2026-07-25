@@ -252,7 +252,12 @@ export function createTimelines(container, manifest, payload, computePFire) {
       const fullRow = payload.conditions[cond].strain[sensorIdx];
       const displayRow = fullRow.slice(payload.strainLeadInFrames); // drop lead-in for display
       const dt = msPerStrainSample();
-      strainSeries[cond] = displayRow.map((v, i) => ({ x: i * dt, y: v }));
+      // fullRow/displayRow are Float32Array views (Phase 5's binary strain
+      // sidecar, see data.js) -- Array.prototype.map on a typed array
+      // always coerces its return value back to that array's numeric type,
+      // so mapping to {x,y} objects here would silently produce NaN. Use
+      // Array.from's mapping form instead, which always returns a plain array.
+      strainSeries[cond] = Array.from(displayRow, (v, i) => ({ x: i * dt, y: v }));
       for (const v of displayRow) {
         if (v < yMin) yMin = v;
         if (v > yMax) yMax = v;

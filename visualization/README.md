@@ -61,12 +61,15 @@ arch -x86_64 /Applications/MATLAB_R2025b.app/bin/matlab -batch \
   "addpath('visualization/export'); exportForViz()"
 ```
 
-This writes `visualization/public/data/manifest.json` and
-`set_E1.00_yaw.json`. **Quick-mode output is for schema validation only** —
-it runs at reduced time resolution (`sampFreq=1000`, ~5 wingbeats) for
-speed, so the resulting accuracy/sensor numbers are not scientifically
-meaningful. It exists only to prove the export pipeline and JSON schema are
-correct end to end.
+This writes `visualization/public/data/manifest.json`,
+`set_E1.00_yaw.json`, and `set_E1.00_yaw_strain.bin`. **Quick-mode output is
+for schema validation only** — it runs at reduced time resolution
+(`sampFreq=1000`, ~5 wingbeats) for speed, so the resulting accuracy/sensor
+numbers are not scientifically meaningful. It exists only to prove the
+export pipeline and JSON/binary schema are correct end to end. Running it
+overwrites the real Medium-grid data checked into the repo — regenerate the
+full export (below) afterward, or `git checkout` the data directory to
+restore it.
 
 ### 2. Validate the schema from the browser side
 
@@ -84,40 +87,50 @@ pass/fail with descriptive errors on any shape mismatch.
 (Serving over HTTP is required — `fetch()` of local JSON generally fails
 under a bare `file://` URL.)
 
-### Later: the full export (Phase 5)
+### The full export (Phase 5 — ✅ done, this is what's deployed)
 
 ```matlab
-exportForViz('quick', false)   % Medium grid: ~10 stiffness values × 3 axes
+exportForViz('quick', false)   % Medium grid: 10 stiffness values × 3 axes = 30 sets
 ```
 
 This is the real, scientifically valid dataset the deployed site ships —
 full `sampFreq`/`simEnd` from `makeParameterStruct.m`, all three rotation
-axes, denser stiffness sampling near stiffness factor 1. Expect this to take
-considerably longer to run (each stiffness value is a fresh Euler-Lagrange
-ODE solve).
+axes (`yaw`, `pitch`, `roll`), denser stiffness sampling near stiffness
+factor 1 (`[0.7/3, 0.35, 0.5, 0.7, 0.85, 1.0, 1.15, 1.4, 2.0, 3.3]` — the
+floor matches the Euler-Lagrange model's convergence limit, ~0.7 GPa). Each
+set exports as a `set_<id>.json` (metadata, deform, optimal sensors,
+accuracy) plus a `set_<id>_strain.bin` sidecar (native-resolution strain,
+float32, see the Data delivery note below).
+
+On the reference machine (M-series Mac, Intel MATLAB under Rosetta) this
+took **~110s/set, ~55 minutes total** for all 30 sets — budget accordingly
+if re-running.
 
 ## File layout
 
 ```
 visualization/
 ├── export/
-│   ├── exportForViz.m   # MATLAB: run the pipeline over a grid → JSON (Tier 1)
+│   ├── exportForViz.m   # MATLAB: run the pipeline over a grid → JSON + binary strain sidecar (Tier 1)
 │   └── runJob.m         # (Phase 6) MATLAB: single entry point for the GitHub Actions worker
 ├── app/
 │   ├── validate.html    # Phase 0: schema-check page, no build step
 │   └── src/
 │       └── data.js      # loadManifest / loadSet / validateSetPayload — shared with later phases
-└── public/data/         # exported JSON (git-ignored — see .gitignore note)
+└── public/data/         # exported JSON + binary strain sidecars (tracked in git, see below)
 ```
 
 ## Data delivery note
 
-Phase 0/quick-mode output is git-ignored — it's low-fidelity and only for
-local schema checks. The **real Medium-grid export (Phase 5)** is the
-dataset that gets committed to the repo and deployed.
+`visualization/public/data/` is **intentionally tracked in git, not
+git-ignored** — continuous deployment (`VISUALIZATION_PLAN.md` §11) means
+the live site needs data present from Phase 1 onward. It currently holds
+the real Phase 5 Medium-grid export (30 sets, ~264 MB uncompressed on disk,
+31 JSON files + 30 `.bin` sidecars, all well under GitHub's 100 MB
+per-file limit so no Git LFS is needed).
 
-**Finding from building Phase 0 — the plan's original ~30 MB gzipped
-estimate was too optimistic, now corrected.** Two things the original
+**Finding from building Phase 0, resolved in Phase 5 — the plan's original
+~30 MB gzipped estimate was too optimistic.** Two things the original
 estimate didn't account for:
 
 1. `strain` must ship at **native time resolution** (`sampFreq`, e.g. 400
@@ -128,14 +141,14 @@ estimate didn't account for:
 2. JSON encodes floating-point numbers as **text** (~12 bytes/number),
    not raw 4-byte binary — a ~3x inflation the original estimate missed.
 
-Net effect: an all-JSON Medium-grid export (~30 sets) is closer to
-**~450 MB uncompressed**, not ~60 MB. Switching `strain` specifically to a
-packed binary `Float32Array` `.bin` sidecar (JSON header + `.bin` payload —
-already anticipated as a fallback in `VISUALIZATION_PLAN.md` §3) cuts that
-to **~210 MB uncompressed / roughly 30-70 MB gzipped**, back in the
-committable-to-repo range. **This binary sidecar is not yet implemented** —
-`exportForViz.m` currently writes everything as JSON, which is correct and
-sufficient for Phase 0's schema-validation purpose (the quick-mode set is
-only ~4 MB), but **Phase 5 should add the binary `strain` sidecar before
-running the real sweep**, or the repo will be considerably larger than
-planned.
+An all-JSON Medium-grid export (30 sets) would have been closer to
+**~450 MB uncompressed**, not ~60 MB. Phase 5 fixed this by shipping
+`strain` as a packed binary `Float32Array` `.bin` sidecar instead — each
+`set_<id>.json` holds everything except strain (deform, optimal sensors,
+accuracy) plus a `strainFile` pointer; `set_<id>_strain.bin` holds both
+conditions' strain arrays back-to-back, sensor-major (each sensor's full
+time series contiguous), written via `exportForViz.m`'s
+`writeStrainBinary()` and reconstructed client-side as zero-copy
+`Float32Array` views by `data.js`'s `loadSet()`/`reconstructStrain()`. This
+brought the real export down to the actual **264 MB uncompressed**
+committed to the repo.

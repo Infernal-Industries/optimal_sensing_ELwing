@@ -65,7 +65,7 @@ if isempty(opt.stiffnessFactors)
         % Medium grid (~10 points), denser near stiffness factor 1 and the
         % low-stiffness accuracy peak (paper Figs 2-3). Floor of 0.23
         % (0.7 GPa) matches the Euler-Lagrange convergence limit.
-        opt.stiffnessFactors = [0.23 0.35 0.5 0.7 0.85 1.0 1.15 1.4 2.0 3.3];
+        opt.stiffnessFactors = [0.7/3 0.35 0.5 0.7 0.85 1.0 1.15 1.4 2.0 3.3];
     end
 end
 if any(opt.stiffnessFactors < 0.7/3)
@@ -108,6 +108,16 @@ for iStiff = 1:length(opt.stiffnessFactors)
         fprintf('[%d/%d] exporting %s ...\n', setIdx, length(opt.stiffnessFactors)*length(opt.axes), setId);
 
         result = exportOneSet(sf, axisName, opt);
+
+        % strain ships as a binary .bin sidecar, not embedded in JSON --
+        % see §3/§4 of the plan: JSON-encoding floats as text plus needing
+        % strain at native (not downsampled) resolution made the all-JSON
+        % Medium grid ~470MB uncompressed. Binary float32 cuts that back to
+        % ~210MB uncompressed. See writeStrainBinary() for the exact byte
+        % layout data.js must match.
+        strainFile = sprintf('set_%s_strain.bin', setId);
+        writeStrainBinary(fullfile(opt.outDir, strainFile), result.strain.flap, result.strain.rotate);
+        result.payload.strainFile = strainFile;
 
         setFile = sprintf('set_%s.json', setId);
         writeJSON(fullfile(opt.outDir, setFile), result.payload);
@@ -264,6 +274,7 @@ payload.strainFrames = nativeStepsPerPeriod; % strain DISPLAY resolution (post-c
 payload.strainLeadInFrames = leadInSamples;  % extra samples prepended to strain, for valid convolution
 payload.period_ms = period_s * 1000;
 payload.conditions = struct();
+strainByCond = struct();
 for c = 1:2
     cond = conditions{c};
 
@@ -272,9 +283,11 @@ for c = 1:2
 
     % strain array length = strainLeadInFrames + strainFrames; convolving
     % the full array 'valid' with staFilt yields exactly strainFrames output
-    % samples, aligned 1:1 with the displayed wingbeat.
+    % samples, aligned 1:1 with the displayed wingbeat. Returned separately
+    % (not embedded in payload) -- the caller writes it to the binary
+    % sidecar; see writeStrainBinary().
     strain_c = raw.(cond).strain;   % nSensorLocs x nTime
-    payload.conditions.(cond).strain = single(strain_c(:, strainStart:iEnd));
+    strainByCond.(cond) = single(strain_c(:, strainStart:iEnd));
 end
 
 payload.optimalSensors = struct( ...
@@ -282,22 +295,20 @@ payload.optimalSensors = struct( ...
     'top5',  sensorsSort(1:5), ...
     'top10', sensors10);
 
-% NOTE (open question for Phase 3 / histogram.js): the Requirements.pdf
-% sketch shows the spanwise histogram as two bar groups, "flapping only"
-% vs "flapping + rotation". SSPOC as implemented here solves for ONE
-% shared sensor set that discriminates between those two conditions --
-% there is no natural second sensor set to plot as a separate group. This
-% exports a single spanwise histogram of sensors10 for now; the exact
-% intended two-group comparison should be revisited against the paper's
-% Fig 3C (spanwise location vs. threshold/stiffness) before building
-% histogram.js. Also note: the paper aggregates over 20 repeated draws for
-% this figure (Fig 3B/3C); this export has only one draw per set.
+% NOTE: spanHistogram (spanwise sensor-location distribution) is exported
+% for reference/possible future use, but histogram.js (Phase 3, later
+% revised) ended up building a spike-time PSTH instead -- see that file's
+% header comment for why a PSTH turned out to be the better fit for the
+% Requirements.pdf sketch's two-group comparison. This is a single-draw
+% histogram (the paper aggregates over 20 repeated draws for its
+% equivalent figure, Fig 3B/3C); this export has only one draw per set.
 payload.spanHistogram = spanwiseHistogram({sensors10}, Pars);
 
 payload.accuracyBySensorCount = accBySensorCount;
 
 result = struct();
 result.payload = payload;
+result.strain = strainByCond;  % caller writes this to the binary sidecar, not embedded in payload
 result.accuracy = struct('top1', accBySensorCount(1), 'top10', accBySensorCount(10), 'all', accAll);
 
 end
@@ -417,5 +428,29 @@ if fid == -1
     error('exportForViz:cannotWrite', 'Could not open %s for writing', path);
 end
 fwrite(fid, txt, 'char');
+fclose(fid);
+end
+
+
+function writeStrainBinary(path, strainFlap, strainRotate)
+% Writes both conditions' strain arrays as raw float32 (little-endian,
+% the only byte order any relevant platform here uses), SENSOR-MAJOR --
+% each sensor's full time series is contiguous -- flap block first, then
+% rotate. data.js's loader must match this exactly.
+%
+% strainFlap/strainRotate are nSensorLocs x nTime (rows=sensor, cols=time,
+% matching eulerLagrange.m's convention throughout this file). MATLAB's
+% fwrite writes a matrix in COLUMN-MAJOR order, so writing the matrix
+% as-is would iterate time fastest (wrong -- would interleave all sensors'
+% values for t=1, then all sensors' for t=2, ...). Transposing first (so
+% each column IS one sensor's full time series) makes the column-major
+% write produce the sensor-major byte layout intended: fwrite(strain',...)
+% writes column 1 (sensor 1, all t) fully before column 2 (sensor 2).
+fid = fopen(path, 'w');
+if fid == -1
+    error('exportForViz:cannotWrite', 'Could not open %s for writing', path);
+end
+fwrite(fid, single(strainFlap)', 'single', 0, 'ieee-le');
+fwrite(fid, single(strainRotate)', 'single', 0, 'ieee-le');
 fclose(fid);
 end

@@ -11,6 +11,7 @@
 // Array-shape note (matches MATLAB's jsonencode dimension order exactly):
 //   - deform[frame][chordIdx][spanIdx]   (MATLAB size: payload.frames x chordElements x spanElements)
 //     Downsampled resolution (default 90/wingbeat) -- fine for the 3D animation loop.
+//     Embedded directly in the JSON (small enough not to need the binary sidecar below).
 //   - strain[sensorIdx][frame]           (MATLAB size: nSensorLocs x (strainLeadInFrames + strainFrames))
 //     NATIVE resolution (== manifest.encoding.sampFreq), NOT downsampled -- deliberately a
 //     different (finer) frame count than `deform`, because encoding.js needs enough time
@@ -21,6 +22,13 @@
 //     a MATLAB-conv('valid')-equivalent convolution against manifest.encoding.staFilt
 //     that covers the ENTIRE displayed wingbeat (strainFrames output samples), not a
 //     truncated one. See encoding.js's convValid().
+//     NOT embedded in the JSON (Phase 5+, see plan §3/§4 sizing correction) -- shipped as
+//     a binary `.bin` sidecar instead (payload.strainFile), float32, sensor-major (each
+//     sensor's full time series contiguous), flap block then rotate block. loadSet()
+//     fetches it and reconstructs payload.conditions.<cond>.strain as an array of
+//     Float32Array views (zero-copy subarrays) into one shared buffer, so every consumer
+//     (encoding.js, wing3d.js, wing2d.js, timelines.js, histogram.js) sees the exact same
+//     strain[sensorIdx][frame] shape as before and needed no changes.
 //   - optimalSensors.top1  -> number (1-based linear index into the chord x span grid)
 //   - optimalSensors.top5  -> number[5]
 //   - optimalSensors.top10 -> number[10]
@@ -110,17 +118,69 @@ export async function loadManifest(baseUrl) {
 }
 
 /**
- * Fetches and structurally validates one set_<id>.json file.
+ * Reconstructs payload.conditions.{flap,rotate}.strain from the raw binary
+ * sidecar -- float32, sensor-major, flap block then rotate block (see
+ * exportForViz.m's writeStrainBinary(), which this must match exactly).
+ * Returns zero-copy Float32Array views (subarray) into one shared buffer,
+ * not plain-array copies -- consumers only ever read these, and typed
+ * arrays support the same indexing/.length/.map/.slice/.reduce surface
+ * every existing consumer (encoding.js etc.) already relies on.
+ * @param {ArrayBuffer} buffer
+ * @param {number} nSensorLocs
+ * @param {number} nStrainTotal - strainLeadInFrames + strainFrames
+ * @param {string} label - for error messages
+ * @returns {{flap: Float32Array[], rotate: Float32Array[]}}
+ */
+function reconstructStrain(buffer, nSensorLocs, nStrainTotal, label) {
+  const floatsPerCond = nSensorLocs * nStrainTotal;
+  const expectedBytes = floatsPerCond * 2 * 4; // 2 conditions, 4 bytes/float32
+  assert(
+    buffer.byteLength === expectedBytes,
+    `${label}: expected ${expectedBytes} bytes (${nSensorLocs} sensors x ${nStrainTotal} frames x 2 conditions x 4 bytes), got ${buffer.byteLength}`
+  );
+
+  function toRows(flat) {
+    const rows = new Array(nSensorLocs);
+    for (let i = 0; i < nSensorLocs; i++) {
+      rows[i] = flat.subarray(i * nStrainTotal, (i + 1) * nStrainTotal);
+    }
+    return rows;
+  }
+
+  const flapView = new Float32Array(buffer, 0, floatsPerCond);
+  const rotateView = new Float32Array(buffer, floatsPerCond * 4, floatsPerCond);
+  return { flap: toRows(flapView), rotate: toRows(rotateView) };
+}
+
+/**
+ * Fetches and structurally validates one set_<id>.json file plus its
+ * binary strain sidecar, and merges the reconstructed strain arrays into
+ * the returned payload (so callers see the same shape as when strain was
+ * embedded directly in the JSON).
  * @param {string} baseUrl - directory containing manifest.json and the set files
  * @param {object} manifest - the already-loaded, already-validated manifest (for grid dims)
  * @param {string} setFile - the `file` field from a manifest.sets[] entry
  */
 export async function loadSet(baseUrl, manifest, setFile) {
-  const url = `${baseUrl.replace(/\/$/, "")}/${setFile}`;
+  const base = baseUrl.replace(/\/$/, "");
+  const url = `${base}/${setFile}`;
   const res = await fetch(url);
   assert(res.ok, `Failed to fetch ${url}: HTTP ${res.status}`);
   const payload = await res.json();
   validateSetPayload(payload, manifest, url);
+
+  const { chordElements, spanElements } = manifest.grid;
+  const nSensorLocs = chordElements * spanElements;
+  const nStrainTotal = payload.strainFrames + payload.strainLeadInFrames;
+
+  const binUrl = `${base}/${payload.strainFile}`;
+  const binRes = await fetch(binUrl);
+  assert(binRes.ok, `Failed to fetch ${binUrl}: HTTP ${binRes.status}`);
+  const buffer = await binRes.arrayBuffer();
+  const strain = reconstructStrain(buffer, nSensorLocs, nStrainTotal, binUrl);
+  payload.conditions.flap.strain = strain.flap;
+  payload.conditions.rotate.strain = strain.rotate;
+
   return payload;
 }
 
@@ -139,9 +199,11 @@ export function validateSetPayload(payload, manifest, label = "payload") {
     `${label}.strainLeadInFrames missing or invalid`
   );
   assert(typeof payload.period_ms === "number" && payload.period_ms > 0, `${label}.period_ms missing or invalid`);
+  assert(
+    typeof payload.strainFile === "string" && payload.strainFile.length > 0,
+    `${label}.strainFile missing or invalid`
+  );
   const nFrames = payload.frames;
-  const nStrainFrames = payload.strainFrames;
-  const nStrainTotal = payload.strainFrames + payload.strainLeadInFrames;
 
   assert(payload.conditions, `${label}.conditions missing`);
   for (const cond of ["flap", "rotate"]) {
@@ -150,6 +212,9 @@ export function validateSetPayload(payload, manifest, label = "payload") {
 
     // deform[frame][chordIdx][spanIdx] -- animation resolution (payload.frames)
     // Only the innermost (spanIdx) level is numeric; outer levels are arrays of arrays.
+    // strain is NOT checked here -- it isn't embedded in the JSON (see file header);
+    // reconstructStrain()'s byte-length assertion is what validates it, after loadSet()
+    // fetches the binary sidecar referenced by payload.strainFile.
     isArray(c.deform, nFrames, `${label}.conditions.${cond}.deform`);
     isArray(c.deform[0], chordElements, `${label}.conditions.${cond}.deform[0]`);
     isNumberArray(c.deform[0][0], spanElements, `${label}.conditions.${cond}.deform[0][0]`);
@@ -158,12 +223,6 @@ export function validateSetPayload(payload, manifest, label = "payload") {
       spanElements,
       `${label}.conditions.${cond}.deform[last][last]`
     );
-
-    // strain[sensorIdx][frame] -- native/encoding resolution; length is
-    // strainLeadInFrames + strainFrames, NOT just strainFrames (see file header).
-    isArray(c.strain, nSensorLocs, `${label}.conditions.${cond}.strain`);
-    isNumberArray(c.strain[0], nStrainTotal, `${label}.conditions.${cond}.strain[0]`);
-    isNumberArray(c.strain[nSensorLocs - 1], nStrainTotal, `${label}.conditions.${cond}.strain[last]`);
   }
 
   assert(payload.optimalSensors, `${label}.optimalSensors missing`);
