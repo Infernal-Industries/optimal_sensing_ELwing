@@ -46,23 +46,16 @@ async function main() {
     let wing, wing2d, timelines, histogram, currentSet, currentPayload;
 
     // Heavy: computePFireAll recomputes P(fire) for all ~1300 sensors x 2 conditions
-    // in both wing3d.js and wing2d.js. The threshold sliders fire an 'input' event per
-    // pixel of drag, so without coalescing this ran dozens of times per animation frame
-    // -- especially costly with Phase 5's real (native-resolution) strain arrays, much
-    // larger than Phase 0-4's quick-mode placeholder. Collapse to at most one recompute
-    // per animation frame.
-    let thresholdPending = false;
+    // in both wing3d.js and wing2d.js -- expensive with Phase 5's real (native-
+    // resolution) strain arrays. β/α/ω are wired with `confirm: true` below (an Apply
+    // button gates the actual recompute), so pushThreshold only ever runs once per
+    // explicit user commit, not per drag-frame.
     function pushThreshold() {
-      if (thresholdPending) return;
-      thresholdPending = true;
-      requestAnimationFrame(() => {
-        thresholdPending = false;
-        wing.setThreshold(nldGrad, nldShift, staFreq);
-        timelines.setThreshold(nldGrad, nldShift, staFreq);
-        wing2d.setThreshold(nldGrad, nldShift, staFreq);
-        histogram.setThreshold(nldGrad, nldShift, staFreq);
-        updateAccuracyNotice();
-      });
+      wing.setThreshold(nldGrad, nldShift, staFreq);
+      timelines.setThreshold(nldGrad, nldShift, staFreq);
+      wing2d.setThreshold(nldGrad, nldShift, staFreq);
+      histogram.setThreshold(nldGrad, nldShift, staFreq);
+      updateAccuracyNotice();
     }
 
     function updateAccuracyNotice() {
@@ -148,12 +141,18 @@ async function main() {
       loadAndMount(match);
     });
 
+    // β/α/ω: confirm-gated (Apply button, see pushThreshold's comment above), and the
+    // slider now snaps in ~10 coarse steps across its range -- matching Wing stiffness
+    // factor E's ~10-point ladder feel -- rather than smooth continuous drag. The number
+    // box is unrestricted (step="any" in controls.js), so exact/in-between values are
+    // only reachable by typing, never by dragging.
     createLiveDualControl(paramControls, {
       label: "Neural threshold (β)",
       min: 0.05,
       max: 0.7,
-      step: 0.01,
+      step: 0.07, // ~10 stops across [0.05, 0.7]
       value: nldShift,
+      confirm: true,
       onChange: (v) => {
         nldShift = v;
         pushThreshold();
@@ -163,9 +162,10 @@ async function main() {
       label: "Slope (α)",
       min: 1,
       max: 100,
-      step: 1,
+      step: 11, // exactly 10 stops across [1, 100]
       value: nldGrad,
       format: (v) => v.toFixed(0),
+      confirm: true,
       onChange: (v) => {
         nldGrad = v;
         pushThreshold();
@@ -175,8 +175,9 @@ async function main() {
       label: "Filter frequency (ω)",
       min: 0,
       max: 5,
-      step: 0.1,
+      step: 0.5, // 11 stops across [0, 5]
       value: staFreq,
+      confirm: true,
       onChange: (v) => {
         staFreq = v;
         pushThreshold();
@@ -222,6 +223,7 @@ async function main() {
       points: uniqueStiffness,
       value: firstSet.stiffnessFactor,
       floor: STIFFNESS_FLOOR,
+      confirm: true,
       onChange: (v) => {
         const match = manifest.sets.find((s) => s.stiffnessFactor === v && s.axis === currentSet.axis);
         if (!match) {
