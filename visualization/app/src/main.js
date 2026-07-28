@@ -140,7 +140,12 @@ async function main() {
       loadAndMount(match);
     });
 
-    // β/α/ω apply immediately on every slider move (like Animation speed/Sensor count
+    // Neural threshold (β) is a genuine independent variable of the paper (title:
+    // "wing structure AND neural encoding jointly determine sensing strategies"),
+    // co-equal with wing stiffness E -- kept editable. Slope (α) and filter frequency
+    // (ω) are secondary shape-parameters of the same encoding model, not headline swept
+    // variables in the paper, so they're fixed at the exported defaults (no UI control).
+    // Applies immediately on every slider move (like Animation speed/Sensor count
     // below) -- no Apply-button gating needed now that encoding.js's caching brought a
     // full recompute down to ~115ms (see pushThreshold's comment above).
     createLiveDualControl(paramControls, {
@@ -151,29 +156,6 @@ async function main() {
       value: nldShift,
       onChange: (v) => {
         nldShift = v;
-        pushThreshold();
-      },
-    });
-    createLiveDualControl(paramControls, {
-      label: "Slope (α)",
-      min: 1,
-      max: 100,
-      step: 1,
-      value: nldGrad,
-      format: (v) => v.toFixed(0),
-      onChange: (v) => {
-        nldGrad = v;
-        pushThreshold();
-      },
-    });
-    createLiveDualControl(paramControls, {
-      label: "Filter frequency (ω)",
-      min: 0,
-      max: 5,
-      step: 0.1,
-      value: staFreq,
-      onChange: (v) => {
-        staFreq = v;
         pushThreshold();
       },
     });
