@@ -4,7 +4,7 @@ import { createTimelines } from "./timelines.js";
 import { createWing2D } from "./wing2d.js";
 import { createHistogram } from "./histogram.js";
 import { computePFire } from "./encoding.js";
-import { createLiveDualControl, createResolutionLadderControl, makeApplyButton } from "./controls.js";
+import { createLiveDualControl, createResolutionLadderControl } from "./controls.js";
 
 // Physical floor for wing stiffness (Plan §4/§7): the Euler-Lagrange model
 // doesn't converge below ~0.7 GPa; stiffness factor 1 = 3 GPa, so the floor
@@ -45,11 +45,10 @@ async function main() {
     // ones existed at closure-creation time.
     let wing, wing2d, timelines, histogram, currentSet, currentPayload;
 
-    // Heavy: computePFireAll recomputes P(fire) for all ~1300 sensors x 2 conditions
-    // in both wing3d.js and wing2d.js -- expensive with Phase 5's real (native-
-    // resolution) strain arrays. β/α/ω are wired with `confirm: true` below (an Apply
-    // button gates the actual recompute), so pushThreshold only ever runs once per
-    // explicit user commit, not per drag-frame.
+    // computePFireAll recomputes P(fire) for all ~1300 sensors x 2 conditions in both
+    // wing3d.js and wing2d.js on every call -- fires live on every slider drag frame, but
+    // encoding.js caches/dedupes this (see pfireAllCache and the hoisted STA filter
+    // build), which brought one full recompute down to ~115ms, fast enough to stay live.
     function pushThreshold() {
       wing.setThreshold(nldGrad, nldShift, staFreq);
       timelines.setThreshold(nldGrad, nldShift, staFreq);
@@ -141,65 +140,38 @@ async function main() {
       loadAndMount(match);
     });
 
-    // β/α/ω/E share ONE bordered group (confirmGroup) with ONE Apply button inside it --
-    // each control still stages into its own display on every drag/edit, but none of
-    // them fire onChange individually; pressing the shared Apply button commits all
-    // four together (so the threshold recomputes once, not 3x, and any stiffness change
-    // reloads once). `boxed: false` on each control below suppresses their individual
-    // bordered box (see controls.js) since confirmGroup itself provides the border.
-    const confirmGroup = document.createElement("div");
-    confirmGroup.style.cssText =
-      "display:flex;flex-wrap:wrap;align-items:flex-end;gap:1rem;border:1px solid #3d5166;border-radius:6px;padding:8px 10px;background:#161a22;";
-    paramControls.appendChild(confirmGroup);
-
-    // TEMPORARY testing aid: a "Live" checkbox that bypasses the Apply-button gating --
-    // when checked, β/α/ω/E commit immediately on every slider move (the pre-confirm-
-    // gating behavior), same as before this feature was added, for comparing/debugging
-    // against the gated behavior. Remove once no longer needed for testing.
-    let liveTesting = false;
-
-    // Slider snaps in ~10 coarse steps across its range -- matching Wing stiffness
-    // factor E's ~10-point ladder feel -- rather than smooth continuous drag. The number
-    // box is unrestricted (step="any" in controls.js), so exact/in-between values are
-    // only reachable by typing, never by dragging.
-    const betaControl = createLiveDualControl(confirmGroup, {
+    // β/α/ω apply immediately on every slider move (like Animation speed/Sensor count
+    // below) -- no Apply-button gating needed now that encoding.js's caching brought a
+    // full recompute down to ~115ms (see pushThreshold's comment above).
+    createLiveDualControl(paramControls, {
       label: "Neural threshold (β)",
       min: 0.05,
       max: 0.7,
-      step: 0.07, // ~10 stops across [0.05, 0.7]
+      step: 0.01,
       value: nldShift,
-      confirm: true,
-      boxed: false,
-      isLive: () => liveTesting,
       onChange: (v) => {
         nldShift = v;
         pushThreshold();
       },
     });
-    const alphaControl = createLiveDualControl(confirmGroup, {
+    createLiveDualControl(paramControls, {
       label: "Slope (α)",
       min: 1,
       max: 100,
-      step: 11, // exactly 10 stops across [1, 100]
+      step: 1,
       value: nldGrad,
       format: (v) => v.toFixed(0),
-      confirm: true,
-      boxed: false,
-      isLive: () => liveTesting,
       onChange: (v) => {
         nldGrad = v;
         pushThreshold();
       },
     });
-    const omegaControl = createLiveDualControl(confirmGroup, {
+    createLiveDualControl(paramControls, {
       label: "Filter frequency (ω)",
       min: 0,
       max: 5,
-      step: 0.5, // 11 stops across [0, 5]
+      step: 0.1,
       value: staFreq,
-      confirm: true,
-      boxed: false,
-      isLive: () => liveTesting,
       onChange: (v) => {
         staFreq = v;
         pushThreshold();
@@ -238,16 +210,14 @@ async function main() {
     // --- Wing stiffness E: the resolution-ladder case (Plan §7). Phase 5's Medium
     // grid precomputes 10 stiffness values (deduped here -- manifest.sets has one
     // entry per axis, so raw stiffnessFactor values repeat 3x) at the current axis;
-    // picking a grid point reloads the matching precomputed set.
+    // picking a grid point reloads the matching precomputed set immediately (dragging
+    // across notches fires a reload per notch, same as before Apply-gating existed).
     const uniqueStiffness = [...new Set(manifest.sets.map((s) => s.stiffnessFactor))];
-    const stiffnessControl = createResolutionLadderControl(confirmGroup, {
+    createResolutionLadderControl(paramControls, {
       label: "Wing stiffness factor (E)",
       points: uniqueStiffness,
       value: firstSet.stiffnessFactor,
       floor: STIFFNESS_FLOOR,
-      confirm: true,
-      boxed: false,
-      isLive: () => liveTesting,
       onChange: (v) => {
         const match = manifest.sets.find((s) => s.stiffnessFactor === v && s.axis === currentSet.axis);
         if (!match) {
@@ -257,34 +227,6 @@ async function main() {
         loadAndMount(match);
       },
     });
-
-    // One shared Apply button, inside confirmGroup alongside the four controls it
-    // commits together -- pressing it fires each control's onChange in turn (each
-    // control's own pushThreshold/loadAndMount body is unchanged; only the button that
-    // triggers them is now singular instead of one per control).
-    const applyBtn = makeApplyButton(() => {
-      betaControl.commit();
-      alphaControl.commit();
-      omegaControl.commit();
-      stiffnessControl.commit();
-    }, "Apply parameter changes");
-    confirmGroup.appendChild(applyBtn);
-
-    // TEMPORARY testing checkbox (see liveTesting above): disables the Apply button and
-    // makes β/α/ω/E commit immediately on every slider move instead of waiting for it.
-    const liveTestingLabel = document.createElement("label");
-    liveTestingLabel.style.cssText = `color:${"#c3c2b7"};font:0.7rem system-ui,sans-serif;display:flex;align-items:center;gap:4px;cursor:pointer;`;
-    const liveTestingCheckbox = document.createElement("input");
-    liveTestingCheckbox.type = "checkbox";
-    liveTestingLabel.appendChild(liveTestingCheckbox);
-    liveTestingLabel.appendChild(document.createTextNode("Live (testing)"));
-    liveTestingCheckbox.addEventListener("change", () => {
-      liveTesting = liveTestingCheckbox.checked;
-      applyBtn.disabled = liveTesting;
-      applyBtn.style.opacity = liveTesting ? "0.5" : "1";
-      applyBtn.style.cursor = liveTesting ? "default" : "pointer";
-    });
-    confirmGroup.appendChild(liveTestingLabel);
   } catch (err) {
     statusEl.textContent = `Failed to load: ${err.message}`;
     console.error(err);

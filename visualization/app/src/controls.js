@@ -13,15 +13,9 @@
 const INK_SECONDARY = "#c3c2b7";
 const INK_MUTED = "#898781";
 
-// `boxed` (used for confirm-gated controls) draws a border around the whole
-// row -- slider, number box, Apply button, and any snap/reject notice -- so
-// it reads visually as one "commits together, on Apply" unit, distinct from
-// the always-live controls around it.
-function row(labelText, boxed = false) {
+function row(labelText) {
   const wrap = document.createElement("div");
-  wrap.style.cssText = boxed
-    ? "display:flex;flex-direction:column;gap:2px;min-width:220px;border:1px solid #3d5166;border-radius:6px;padding:6px 8px;background:#161a22;"
-    : "display:flex;flex-direction:column;gap:2px;min-width:220px;";
+  wrap.style.cssText = "display:flex;flex-direction:column;gap:2px;min-width:220px;";
   const label = document.createElement("label");
   label.textContent = labelText;
   label.style.cssText = `color:${INK_SECONDARY};font:0.75rem system-ui,sans-serif;display:flex;justify-content:space-between;gap:6px;`;
@@ -35,50 +29,22 @@ function row(labelText, boxed = false) {
   return { wrap, label, inputs, notice };
 }
 
-// Confirm-gated controls (opts.confirm) stage slider/number-box edits into the
-// displayed value immediately (cheap) but withhold the expensive onChange call
-// until commit() is called -- driven by one shared Apply button in main.js,
-// not a per-control button, so committing several staged params (β/α/ω/E)
-// only triggers their recomputes/reloads once, together, per click.
-export function makeApplyButton(onClick, label = "Apply") {
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.textContent = label;
-  btn.style.cssText =
-    "background:#2c3e50;color:#e6e6e6;border:1px solid #3d5166;border-radius:3px;padding:2px 8px;font:0.7rem system-ui,sans-serif;cursor:pointer;flex-shrink:0;";
-  btn.addEventListener("click", onClick);
-  return btn;
-}
-
 /**
  * Fully client-computable parameter (β, ω, α, speed, sensor count): slider
- * and number box share the same bounded range.
+ * and number box share the same bounded range, both live (fire on every
+ * input) -- encoding.js's caching keeps a full recompute fast enough
+ * (~115ms) to apply directly on every drag frame, no confirm/Apply step
+ * needed.
  * @param {HTMLElement} container
  * @param {{label:string, min:number, max:number, step:number, value:number,
- *   format?:(v:number)=>string, onChange:(v:number)=>void, confirm?:boolean}} opts
- *   confirm (default false): if true, dragging the slider/editing the number box only
- *   updates the displayed (staged) value -- onChange (and whatever expensive recompute
- *   it triggers) only fires when the caller invokes the returned `commit()` method,
- *   which main.js wires to one shared Apply button covering all confirm-gated controls.
- *   Use for params whose consumers are too expensive to recompute on every drag-frame
- *   'input' event (e.g. β/α/ω, which trigger a full P(fire) recompute over ~1300
- *   sensors). Also makes the slider snap in coarse steps (per `step`) -- the number box
- *   stays free-entry at any precision regardless, so exact/in-between values are only
- *   reachable by typing, never dragging.
- *   boxed (default: same as confirm): draws a bordered box around this control's row.
- *   Pass false when several confirm-gated controls share one outer bordered container
- *   (with a single Apply button) elsewhere, so each control doesn't also draw its own.
- *   isLive?: () => boolean -- checked on every stage while confirm is true; when it
- *   returns true, commits immediately instead of waiting for the caller's commit().
- *   Lets a runtime toggle (e.g. a "live" testing checkbox) switch a confirm-gated
- *   control back to per-drag-frame behavior without recreating it.
+ *   format?:(v:number)=>string, onChange:(v:number)=>void}} opts
  */
 export function createLiveDualControl(container, opts) {
-  const { label, min, max, step, onChange, confirm = false, boxed = confirm, isLive = () => false } = opts;
+  const { label, min, max, step, onChange } = opts;
   const format = opts.format || ((v) => v.toFixed(2));
   let value = opts.value;
 
-  const { wrap, label: labelEl, inputs } = row(label, boxed);
+  const { wrap, label: labelEl, inputs } = row(label);
   const valueSpan = document.createElement("span");
   valueSpan.textContent = format(value);
   labelEl.appendChild(valueSpan);
@@ -93,7 +59,7 @@ export function createLiveDualControl(container, opts) {
 
   const numberBox = document.createElement("input");
   numberBox.type = "number";
-  numberBox.step = "any"; // free precision regardless of the slider's snap granularity
+  numberBox.step = String(step);
   numberBox.value = String(value);
   numberBox.style.cssText = "width:70px;background:#12151c;color:#e6e6e6;border:1px solid #2c2c2a;border-radius:3px;padding:2px 4px;";
 
@@ -101,41 +67,27 @@ export function createLiveDualControl(container, opts) {
   inputs.appendChild(numberBox);
   container.appendChild(wrap);
 
-  // stage() updates the displayed value only (cheap: DOM text/attrs), never fires
-  // onChange itself. commit() additionally fires onChange. Each entry point below
-  // decides whether to commit right after staging: non-confirm controls always do;
-  // confirm controls only do when isLive() (a runtime toggle) says to, otherwise they
-  // wait for the caller's own commit() call (main.js's single shared Apply button).
-  function stage(v, source) {
+  function apply(v, source) {
     value = v;
     valueSpan.textContent = format(value);
     if (source !== "slider") slider.value = String(value);
     if (source !== "number") numberBox.value = String(value);
-  }
-  function commit() {
     onChange(value);
   }
 
-  slider.addEventListener("input", () => {
-    stage(Number(slider.value), "slider");
-    if (!confirm || isLive()) commit();
-  });
+  slider.addEventListener("input", () => apply(Number(slider.value), "slider"));
   numberBox.addEventListener("change", () => {
     const v = Number(numberBox.value);
-    if (!Number.isFinite(v)) return;
-    stage(v, "number");
-    if (!confirm || isLive()) commit();
+    if (Number.isFinite(v)) apply(v, "number");
   });
 
   return {
     setValue(v) {
-      stage(v, null);
-      commit();
+      apply(v, null);
     },
     getValue() {
       return value;
     },
-    commit,
   };
 }
 
@@ -151,26 +103,15 @@ export function createLiveDualControl(container, opts) {
  *     never snap (there is no valid nearest value below the floor)
  * @param {HTMLElement} container
  * @param {{label:string, points:number[], value:number, floor?:number,
- *   format?:(v:number)=>string, onChange:(v:number, isExact:boolean)=>void, confirm?:boolean}} opts
- *   confirm (default false): if true, moving the slider only updates the displayed
- *   (staged) value (and any snap/reject notice) -- onChange only fires when the caller
- *   invokes the returned `commit()` method (main.js's shared Apply button). Use when
- *   onChange triggers something too expensive to run per grid-point while dragging
- *   (e.g. wing stiffness E, which reloads a whole precomputed dataset over the network).
- *   boxed (default: same as confirm): draws a bordered box around this control's row;
- *   pass false when grouped into one shared bordered container elsewhere (see
- *   createLiveDualControl's matching option).
- *   isLive?: () => boolean -- see createLiveDualControl's matching option; when true,
- *   commits immediately on every slider move instead of waiting for commit().
+ *   format?:(v:number)=>string, onChange:(v:number, isExact:boolean)=>void}} opts
  */
 export function createResolutionLadderControl(container, opts) {
-  const { label, points, floor, onChange, confirm = false, boxed = confirm, isLive = () => false } = opts;
+  const { label, points, floor, onChange } = opts;
   const format = opts.format || ((v) => v.toFixed(2));
   const sorted = points.slice().sort((a, b) => a - b);
   let value = opts.value;
-  let pendingExact = true; // isExact flag for whatever `value` currently holds, applied at commit time
 
-  const { wrap, label: labelEl, inputs, notice } = row(label, boxed);
+  const { wrap, label: labelEl, inputs, notice } = row(label);
   const valueSpan = document.createElement("span");
   valueSpan.textContent = format(value);
   labelEl.appendChild(valueSpan);
@@ -185,7 +126,7 @@ export function createResolutionLadderControl(container, opts) {
 
   const numberBox = document.createElement("input");
   numberBox.type = "number";
-  numberBox.step = "any"; // free precision -- exact/approximate values only reachable by typing
+  numberBox.step = "0.01";
   numberBox.value = String(value);
   numberBox.style.cssText = "width:70px;background:#12151c;color:#e6e6e6;border:1px solid #2c2c2a;border-radius:3px;padding:2px 4px;";
 
@@ -197,17 +138,12 @@ export function createResolutionLadderControl(container, opts) {
     return sorted.reduce((best, p) => (Math.abs(p - v) < Math.abs(best - v) ? p : best), sorted[0]);
   }
 
-  function stageExact(v) {
+  function applyExact(v) {
     value = v;
-    pendingExact = true;
     valueSpan.textContent = format(value);
     slider.value = String(sorted.indexOf(value));
     numberBox.value = String(value);
     notice.textContent = "";
-  }
-
-  function applyExact(v) {
-    stageExact(v);
     onChange(value, true);
   }
 
@@ -218,25 +154,19 @@ export function createResolutionLadderControl(container, opts) {
       return;
     }
     if (sorted.includes(typed)) {
-      if (confirm) stageExact(typed);
-      else applyExact(typed);
+      applyExact(typed);
       return;
     }
     const snapped = nearest(typed);
     value = snapped;
-    pendingExact = false;
     valueSpan.textContent = format(value);
     slider.value = String(sorted.indexOf(snapped));
     numberBox.value = String(snapped);
     notice.textContent = `Showing nearest precomputed value ${format(snapped)} — requested ${format(typed)} needs live MATLAB compute (not available: Tier 2 backend not yet built).`;
-    if (!confirm) onChange(value, false);
+    onChange(value, false);
   }
 
-  slider.addEventListener("input", () => {
-    const v = sorted[Number(slider.value)];
-    if (!confirm || isLive()) applyExact(v);
-    else stageExact(v);
-  });
+  slider.addEventListener("input", () => applyExact(sorted[Number(slider.value)]));
   numberBox.addEventListener("change", () => {
     const v = Number(numberBox.value);
     if (Number.isFinite(v)) resolveTyped(v);
@@ -248,9 +178,6 @@ export function createResolutionLadderControl(container, opts) {
     },
     getValue() {
       return value;
-    },
-    commit() {
-      onChange(value, pendingExact);
     },
   };
 }
