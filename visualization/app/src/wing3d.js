@@ -1,5 +1,4 @@
 import * as THREE from "three";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { divergingColor, sequentialColor, firingIndicatorColor } from "./colormap.js";
 import { computePFireAll } from "./encoding.js";
 import { sensorIndexToChordSpan } from "./data.js";
@@ -14,6 +13,16 @@ import { sensorIndexToChordSpan } from "./data.js";
 const TARGET_BEND_FRACTION_OF_SPAN = 0.22;
 
 const CONDITION_LABELS = { flap: "flapping only", rotate: "flapping + rotation" };
+
+// Per-wing rotation (dragging turns each wing about its own center, not an
+// orbit around the shared scene). Radians per pixel of drag, and a pitch
+// clamp so the wing can't flip past vertical (which would read as broken
+// lighting/labels, not "rotated").
+const ROTATE_SENSITIVITY = 0.008;
+const PITCH_LIMIT = Math.PI / 6; // ±30°
+const CLICK_MOVE_THRESHOLD = 5; // px -- below this, pointerup is a click, not the end of a drag
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 2.2;
 
 function buildWingGeometry(chordElements, spanElements, chordMm, spanMm) {
   const geometry = new THREE.BufferGeometry();
@@ -76,13 +85,17 @@ function maxAbsStrain(payload) {
  * @param {HTMLElement} container
  * @param {object} manifest - validated manifest.json
  * @param {object} payload - validated set_*.json payload
- * @param {{onFrame?: (frameIdx:number, timeMs:number) => void}} [opts] -
- *   onFrame is invoked once per rendered frame with the current animation
- *   frame index and the elapsed time (ms) within the wingbeat, so callers
- *   (timelines.js's playhead) can stay in sync without polling.
+ * @param {{onFrame?: (frameIdx:number, timeMs:number) => void,
+ *   onSelectSensor?: (sensorIdx1:number) => void}} [opts] -
+ *   onFrame is invoked once per rendered (or, while hidden, per advanced)
+ *   frame with the current animation frame index and the elapsed time (ms)
+ *   within the wingbeat, so callers (timelines.js's playhead, wing2d.js's
+ *   setFrame) can stay in sync without polling, even while this view isn't
+ *   the one currently shown (see setVisible).
  * @returns {{dispose: () => void, setColorMode: (mode:'strain'|'pfire') => void,
  *   setThreshold: (nldGrad:number, nldShift:number, staFreq:number) => void,
- *   setSpeed: (multiplier:number) => void, setSensorCount: (n:number) => void}}
+ *   setSpeed: (multiplier:number) => void, setSensorCount: (n:number) => void,
+ *   setVisible: (v:boolean) => void, resize: () => void}}
  */
 export function createWingScene(container, manifest, payload, opts = {}) {
   const { chordElements, spanElements, chord_mm: chordMm, span_mm: spanMm } = manifest.grid;
@@ -91,19 +104,19 @@ export function createWingScene(container, manifest, payload, opts = {}) {
   scene.background = new THREE.Color(0x0b0e14);
 
   // Deliberate 3/4 angle: deform (bend) is applied along Z, so the camera
-  // must NOT look straight down -Z (a near-face-on view like
-  // (0, y, largeZ) foreshortens Z-motion to nearly nothing on screen --
-  // this was the Phase 1 bug caught by the screenshot check). A large X
-  // offset keeps the bend axis clearly transverse to the view direction.
+  // must NOT look straight down -Z (a near-face-on view like (0, y, largeZ)
+  // foreshortens Z-motion to nearly nothing on screen -- this was the Phase 1
+  // bug caught by the screenshot check). A large X offset keeps the bend axis
+  // clearly transverse to the view direction. The camera is now fixed in
+  // world space (rotation is per-wing, not an orbit) -- only its DISTANCE
+  // along this same direction changes, in resize()/wheel-zoom, to keep both
+  // wings framed at any panel aspect ratio.
+  const camDir = new THREE.Vector3(1.5, 1.1, 1.6).normalize();
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 2000);
-  camera.position.set(spanMm * 1.5, spanMm * 1.1, spanMm * 1.6);
+  const target = new THREE.Vector3(0, spanMm * 0.5, 0);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   container.appendChild(renderer.domElement);
-
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.target.set(0, spanMm * 0.4, 0);
-  controls.enableDamping = true;
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.6));
   const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -135,11 +148,17 @@ export function createWingScene(container, manifest, payload, opts = {}) {
   }
   recomputePFire(manifest.encoding.nldGrad, manifest.encoding.nldShift, manifest.encoding.staFreq);
 
-  const gap = chordMm * 1.8;
+  // gap widened vs the old orbit-camera layout (was chordMm*1.8): pivoting
+  // each wing about its own mid-span means it sweeps a radius of
+  // sqrt((chordMm/2)^2 + (spanMm/2)^2) as it turns, which at the old gap
+  // would make the two wings interpenetrate at combined yaw+pitch.
+  const gap = spanMm * 1.1;
   const conditions = ["flap", "rotate"];
+  const pivots = {};
   const meshes = {};
   const labels = {};
-  const sensorMarkers = {}; // cond -> array of {mesh, chordIdx, spanIdx, sensorIdx1}
+  const sensorMarkers = {}; // cond -> array of {mesh, chordIdx, spanIdx, sensorIdx1, rank}
+  const pickables = []; // every mesh (wing + marker) raycast checks against
 
   // Shared geometry/material template for optimal-sensor markers. Per
   // Requirements.pdf Req #1, these ALWAYS show live P(fire) (bright =
@@ -148,6 +167,17 @@ export function createWingScene(container, manifest, payload, opts = {}) {
   const markerGeometry = new THREE.SphereGeometry(chordMm * 0.06, 12, 12);
 
   conditions.forEach((cond, i) => {
+    // Pivot at mid-span, mesh offset -spanMm/2 inside it -- world-space
+    // vertex/marker positions are IDENTICAL to before (the offsets cancel),
+    // so applyFrame()'s geometry/marker math below needs no changes at all.
+    // Rotating the pivot turns the wing about its own center; the pivot's
+    // own X offset (not the mesh's) now carries the side-by-side placement.
+    const pivot = new THREE.Group();
+    pivot.position.set((i - 0.5) * gap, spanMm * 0.5, 0);
+    pivot.rotation.order = "YXZ"; // yaw applied before pitch -- avoids a tumbling/trackball feel
+    scene.add(pivot);
+    pivots[cond] = pivot;
+
     const geometry = buildWingGeometry(chordElements, spanElements, chordMm, spanMm);
     const material = new THREE.MeshStandardMaterial({
       vertexColors: true,
@@ -156,9 +186,10 @@ export function createWingScene(container, manifest, payload, opts = {}) {
       roughness: 0.8,
     });
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.x = (i - 0.5) * gap;
-    scene.add(mesh);
+    mesh.position.y = -spanMm * 0.5;
+    pivot.add(mesh);
     meshes[cond] = mesh;
+    pickables.push(mesh);
 
     const label = document.createElement("div");
     label.textContent = CONDITION_LABELS[cond];
@@ -170,7 +201,9 @@ export function createWingScene(container, manifest, payload, opts = {}) {
     sensorMarkers[cond] = payload.optimalSensors.top10.map((sensorIdx1, rank) => {
       const { chordIdx, spanIdx } = sensorIndexToChordSpan(sensorIdx1, chordElements);
       const markerMesh = new THREE.Mesh(markerGeometry, new THREE.MeshBasicMaterial({ color: 0xffffff }));
-      mesh.add(markerMesh); // child of the wing mesh -> inherits its X position automatically
+      markerMesh.userData.sensorIdx1 = sensorIdx1;
+      mesh.add(markerMesh); // child of the wing mesh -> inherits its rotation/position automatically
+      pickables.push(markerMesh);
       return { mesh: markerMesh, chordIdx, spanIdx, sensorIdx1, rank };
     });
   });
@@ -207,6 +240,11 @@ export function createWingScene(container, manifest, payload, opts = {}) {
     posAttr.needsUpdate = true;
     colorAttr.needsUpdate = true;
     mesh.geometry.computeVertexNormals();
+    // Bending changes posAttr every frame, but Mesh.raycast only computes
+    // boundingSphere once (lazily, if null) and never invalidates it --
+    // without this, wingtip picks silently miss once bend pushes tip
+    // vertices outside the frame-0 sphere.
+    mesh.geometry.computeBoundingSphere();
 
     const MARKER_SURFACE_OFFSET = chordMm * 0.03; // lift slightly off the surface to avoid z-fighting
     for (const marker of sensorMarkers[cond]) {
@@ -222,27 +260,142 @@ export function createWingScene(container, manifest, payload, opts = {}) {
     }
   }
 
+  // --- Camera framing: fixed direction, distance re-derived on resize/zoom
+  // so both wings stay in frame at any panel aspect ratio (a fixed camera
+  // position, as this scene used to have when it always filled the full
+  // viewport width, crops the wings once the panel narrows to half-width).
+  let zoom = 1;
+  const sceneRadius = Math.sqrt((gap * 0.5 + chordMm * 0.5) ** 2 + (spanMm * 0.5) ** 2) * 1.15;
+  function placeCamera() {
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    if (!w || !h) return;
+    const vFov = (camera.fov * Math.PI) / 180;
+    const aspect = w / h;
+    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
+    const limitingFov = Math.min(vFov, hFov);
+    const fitDist = sceneRadius / Math.sin(limitingFov / 2);
+    camera.position.copy(target).addScaledVector(camDir, fitDist / zoom);
+    camera.lookAt(target);
+  }
+
   function resize() {
     const w = container.clientWidth;
     const h = container.clientHeight;
+    if (!w || !h) return; // container hidden (display:none) or not yet laid out -- avoid aspect=Infinity/NaN
     renderer.setSize(w, h);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
+    placeCamera();
   }
-  window.addEventListener("resize", resize);
+  const resizeObserver = new ResizeObserver(resize);
+  resizeObserver.observe(container);
   resize();
 
   function updateLabelPositions() {
+    if (!container.clientWidth || !container.clientHeight) return;
     conditions.forEach((cond) => {
-      const mesh = meshes[cond];
-      const worldPos = new THREE.Vector3(mesh.position.x, spanMm * 1.02, 0);
+      const worldPos = new THREE.Vector3(pivots[cond].position.x, spanMm * 1.02, 0);
       worldPos.project(camera);
       const x = (worldPos.x * 0.5 + 0.5) * container.clientWidth;
       const y = (-worldPos.y * 0.5 + 0.5) * container.clientHeight;
       labels[cond].style.transform = `translate(${x - 60}px, ${y}px)`;
     });
   }
+
+  // --- Per-wing rotation (drag) + click-to-pick + wheel-zoom, replacing
+  // OrbitControls (which orbited the camera around the whole scene).
+  let yaw = 0;
+  let pitch = 0;
+  let dragging = false;
+  let downX = 0;
+  let downY = 0;
+
+  function applyRotation() {
+    for (const cond of conditions) {
+      pivots[cond].rotation.y = yaw;
+      pivots[cond].rotation.x = pitch;
+    }
+    if (opts.onRotate) opts.onRotate(yaw, pitch);
+  }
+
+  const raycaster = new THREE.Raycaster();
+  function pickAt(clientX, clientY) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1
+    );
+    raycaster.setFromCamera(ndc, camera);
+    // recursive:false -- markers are mesh children, and a recursive
+    // intersectObjects would otherwise return the MARKER's own face indices
+    // (a small sphere geometry) as if they were wing-surface hits. Both wing
+    // meshes and marker meshes are listed explicitly in `pickables` instead,
+    // so a direct marker hit is detected and handled as an exact pick.
+    const hits = raycaster.intersectObjects(pickables, false);
+    if (!hits.length) return;
+    const hit = hits[0];
+    if (hit.object.userData.sensorIdx1 !== undefined) {
+      if (opts.onSelectSensor) opts.onSelectSensor(hit.object.userData.sensorIdx1);
+      return;
+    }
+    // Wing-surface hit: snap to the nearest of the hit triangle's 3 vertices,
+    // then convert vertex index -> grid index -> data/MATLAB sensor index.
+    // These are two genuinely different flattening conventions (see the
+    // comment in applyFrame above): the vertex buffer is span-fastest
+    // (idx = ci*spanElements + si), the data/MATLAB one is chord-fastest
+    // (sensorIdx0 = si*chordElements + ci).
+    const mesh = hit.object;
+    const posAttr = mesh.geometry.getAttribute("position");
+    const local = mesh.worldToLocal(hit.point.clone());
+    let bestIdx = hit.face.a;
+    let bestDist = Infinity;
+    for (const vIdx of [hit.face.a, hit.face.b, hit.face.c]) {
+      const dx = posAttr.getX(vIdx) - local.x;
+      const dy = posAttr.getY(vIdx) - local.y;
+      const dz = posAttr.getZ(vIdx) - local.z;
+      const d = dx * dx + dy * dy + dz * dz;
+      if (d < bestDist) {
+        bestDist = d;
+        bestIdx = vIdx;
+      }
+    }
+    const ci = Math.floor(bestIdx / spanElements);
+    const si = bestIdx % spanElements;
+    const sensorIdx1 = si * chordElements + ci + 1;
+    if (opts.onSelectSensor) opts.onSelectSensor(sensorIdx1);
+  }
+
+  function onPointerDown(ev) {
+    dragging = true;
+    downX = ev.clientX;
+    downY = ev.clientY;
+    renderer.domElement.setPointerCapture(ev.pointerId);
+  }
+  function onPointerMove(ev) {
+    if (!dragging) return;
+    yaw += (ev.movementX || 0) * ROTATE_SENSITIVITY;
+    pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, pitch + (ev.movementY || 0) * ROTATE_SENSITIVITY));
+    applyRotation();
+  }
+  function onPointerUp(ev) {
+    if (!dragging) return;
+    dragging = false;
+    const totalMove = Math.hypot(ev.clientX - downX, ev.clientY - downY);
+    if (totalMove < CLICK_MOVE_THRESHOLD) pickAt(ev.clientX, ev.clientY);
+  }
+  function onWheel(ev) {
+    ev.preventDefault();
+    zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom * (1 - ev.deltaY * 0.001)));
+    placeCamera();
+  }
+
+  renderer.domElement.style.cursor = "grab";
+  renderer.domElement.addEventListener("pointerdown", onPointerDown);
+  renderer.domElement.addEventListener("pointermove", onPointerMove);
+  renderer.domElement.addEventListener("pointerup", onPointerUp);
+  renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
 
   // payload.period_ms is ONE REAL WINGBEAT (e.g. 40ms at flapFrequency=25Hz --
   // a real hawkmoth's actual flap rate). Playing that back at real speed is a
@@ -256,6 +409,7 @@ export function createWingScene(container, manifest, payload, opts = {}) {
   let frameIdx = 0;
   let acc = 0;
   let lastT = performance.now();
+  let visible = true;
 
   let running = true;
   function animate(t) {
@@ -268,10 +422,16 @@ export function createWingScene(container, manifest, payload, opts = {}) {
       acc -= msPerFrame;
       frameIdx = (frameIdx + 1) % payload.frames;
     }
-    conditions.forEach((cond) => applyFrame(cond, frameIdx));
-    controls.update();
-    updateLabelPositions();
-    renderer.render(scene, camera);
+    // The rAF loop is the app's shared animation clock (drives wing2d.js's
+    // setFrame + timelines.js's playhead via opts.onFrame) even while this
+    // view isn't the one currently shown -- so frameIdx/onFrame keep
+    // advancing regardless of `visible`, only the expensive per-vertex
+    // geometry update + WebGL render are skipped.
+    if (visible) {
+      conditions.forEach((cond) => applyFrame(cond, frameIdx));
+      updateLabelPositions();
+      renderer.render(scene, camera);
+    }
     if (opts.onFrame) {
       // Real (non-slow-motion) time within the wingbeat, matching
       // payload.period_ms / strain sample spacing -- so timelines.js's
@@ -288,7 +448,11 @@ export function createWingScene(container, manifest, payload, opts = {}) {
   return {
     dispose() {
       running = false;
-      window.removeEventListener("resize", resize);
+      resizeObserver.disconnect();
+      renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+      renderer.domElement.removeEventListener("pointermove", onPointerMove);
+      renderer.domElement.removeEventListener("pointerup", onPointerUp);
+      renderer.domElement.removeEventListener("wheel", onWheel);
       renderer.dispose();
       Object.values(labels).forEach((l) => l.remove());
       renderer.domElement.remove();
@@ -309,5 +473,19 @@ export function createWingScene(container, manifest, payload, opts = {}) {
         }
       }
     },
+    setRotation(newYaw, newPitch) {
+      yaw = newYaw;
+      pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, newPitch));
+      applyRotation();
+    },
+    setVisible(v) {
+      visible = v;
+      if (v) {
+        resize();
+        conditions.forEach((cond) => applyFrame(cond, frameIdx));
+        updateLabelPositions();
+      }
+    },
+    resize,
   };
 }

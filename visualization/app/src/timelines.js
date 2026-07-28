@@ -16,8 +16,6 @@ const INK_MUTED = "#898781";
 const GRIDLINE = "#2c2c2a";
 const SURFACE = "#1a1a19";
 
-const W = 560;
-const H = 160;
 const PAD = { top: 10, right: 10, bottom: 22, left: 40 };
 
 function svgEl(tag, attrs) {
@@ -38,24 +36,31 @@ function niceTicks(min, max, count) {
 
 /**
  * One line chart: two series (flap/rotate) over a shared time axis, plus a
- * playhead and hover crosshair+tooltip.
+ * playhead and hover crosshair+tooltip. Fills its container (via a
+ * ResizeObserver keeping the SVG viewBox equal to the container's actual
+ * CSS pixel size) instead of being fixed-px, so xScale/yScale always map
+ * 1:1 to real screen coordinates -- this also fixes the tooltip position
+ * for free, which previously mixed viewBox units with CSS px.
  * @param {HTMLElement} container
  * @param {{title:string, yFormat:(v:number)=>string}} opts
  */
 function createChart(container, opts) {
   const root = document.createElement("div");
-  root.style.cssText = "position:relative;margin-bottom:0.5rem;";
+  root.style.cssText = "position:absolute;inset:0;display:flex;flex-direction:column;";
   const titleEl = document.createElement("div");
   titleEl.textContent = opts.title;
-  titleEl.style.cssText = `color:${INK_SECONDARY};font:0.75rem system-ui,sans-serif;margin-bottom:2px;`;
+  titleEl.style.cssText = `color:${INK_SECONDARY};font:0.75rem system-ui,sans-serif;margin-bottom:2px;flex:none;`;
   root.appendChild(titleEl);
 
-  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", height: `${H}px` });
-  svg.style.display = "block";
+  let W = 560;
+  let H = 160;
+
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}` });
+  svg.style.cssText = "display:block;width:100%;flex:1;min-height:0;";
   root.appendChild(svg);
 
   const legend = document.createElement("div");
-  legend.style.cssText = `display:flex;gap:12px;font:0.7rem system-ui,sans-serif;color:${INK_SECONDARY};margin-top:2px;`;
+  legend.style.cssText = `display:flex;gap:12px;font:0.7rem system-ui,sans-serif;color:${INK_SECONDARY};margin-top:2px;flex:none;`;
   for (const key of ["flap", "rotate"]) {
     const item = document.createElement("span");
     item.style.cssText = "display:inline-flex;align-items:center;gap:4px;";
@@ -109,6 +114,7 @@ function createChart(container, opts) {
   let xDomain = [0, 1];
   let yDomain = [0, 1];
   let seriesData = { flap: [], rotate: [] }; // arrays of {x, y}
+  let lastPlayheadX = 0;
 
   function xScale(x) {
     return PAD.left + ((x - xDomain[0]) / (xDomain[1] - xDomain[0])) * (W - PAD.left - PAD.right);
@@ -161,6 +167,27 @@ function createChart(container, opts) {
     }
   }
 
+  // Keeps viewBox equal to the SVG's actual rendered CSS pixel size, so
+  // xScale/yScale (and therefore the tooltip's CSS-px position below) never
+  // need a separate viewBox<->CSS-px conversion factor.
+  function applyResize(w, h) {
+    if (!w || !h || (Math.abs(w - W) < 1 && Math.abs(h - H) < 1)) return;
+    W = w;
+    H = h;
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    playhead.setAttribute("y2", H - PAD.bottom);
+    crosshair.setAttribute("y2", H - PAD.bottom);
+    hitRect.setAttribute("width", W - PAD.left - PAD.right);
+    hitRect.setAttribute("height", H - PAD.top - PAD.bottom);
+    render();
+    setPlayheadX(lastPlayheadX); // re-apply in the new W-based scale, not stale units
+  }
+  const resizeObserver = new ResizeObserver((entries) => {
+    const { width, height } = entries[0].contentRect;
+    applyResize(width, height);
+  });
+  resizeObserver.observe(svg);
+
   hitRect.addEventListener("pointermove", (ev) => {
     const rect = svg.getBoundingClientRect();
     const svgX = ((ev.clientX - rect.left) / rect.width) * W;
@@ -189,6 +216,8 @@ function createChart(container, opts) {
       .join("<br>");
     tooltip.innerHTML = `${Math.round(nearestX)}ms<br>${rows}`;
     tooltip.style.display = "block";
+    // xScale() returns viewBox units, which now equal real CSS px 1:1 (see
+    // applyResize) since W/H track the SVG's actual rendered size.
     tooltip.style.left = `${xScale(nearestX) + 8}px`;
     tooltip.style.top = "4px";
   });
@@ -196,6 +225,13 @@ function createChart(container, opts) {
     crosshair.setAttribute("opacity", 0);
     tooltip.style.display = "none";
   });
+
+  function setPlayheadX(x) {
+    lastPlayheadX = x;
+    const px = xScale(x);
+    playhead.setAttribute("x1", px);
+    playhead.setAttribute("x2", px);
+  }
 
   return {
     setDomains(newXDomain, newYDomain) {
@@ -206,10 +242,9 @@ function createChart(container, opts) {
       seriesData = { flap: flapPts, rotate: rotatePts };
       render();
     },
-    setPlayheadX(x) {
-      const px = xScale(x);
-      playhead.setAttribute("x1", px);
-      playhead.setAttribute("x2", px);
+    setPlayheadX,
+    dispose() {
+      resizeObserver.disconnect();
     },
   };
 }
@@ -221,11 +256,21 @@ function createChart(container, opts) {
  * @param {import("./encoding.js")} encodingModule - pass computePFire in
  */
 export function createTimelines(container, manifest, payload, computePFire) {
-  const strainChart = createChart(container, {
+  // Each chart's root is `position:absolute;inset:0` (see createChart) so it can
+  // ResizeObserver-track its own slot's exact pixel size -- it needs its OWN
+  // positioned wrapper, not to share `container` directly with the other chart
+  // (index.html's `#timelines-wrap > div` CSS already styles these: flex:1,
+  // min-height:0, position:relative).
+  const strainWrap = document.createElement("div");
+  container.appendChild(strainWrap);
+  const pfireWrap = document.createElement("div");
+  container.appendChild(pfireWrap);
+
+  const strainChart = createChart(strainWrap, {
     title: "Strain",
     yFormat: (v) => v.toExponential(1),
   });
-  const pfireChart = createChart(container, {
+  const pfireChart = createChart(pfireWrap, {
     title: "P(fire)",
     yFormat: (v) => v.toFixed(2),
   });
@@ -294,6 +339,10 @@ export function createTimelines(container, manifest, payload, computePFire) {
     },
     getSensorIdx() {
       return sensorIdx;
+    },
+    dispose() {
+      strainChart.dispose();
+      pfireChart.dispose();
     },
   };
 }

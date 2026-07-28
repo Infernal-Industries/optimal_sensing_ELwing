@@ -13,20 +13,31 @@
 const INK_SECONDARY = "#c3c2b7";
 const INK_MUTED = "#898781";
 
+// Single-line control row for the compact top bar: label, then slider+numberbox
+// (appended into `inputs`), then a small "ⓘ" notice indicator that only takes
+// space when it actually has something to say (its message goes in the native
+// `title` tooltip, not inline text -- a full sentence per control would blow
+// the top bar's vertical budget across 4+ controls).
 function row(labelText) {
   const wrap = document.createElement("div");
-  wrap.style.cssText = "display:flex;flex-direction:column;gap:2px;min-width:220px;";
-  const label = document.createElement("label");
+  wrap.style.cssText = `display:flex;align-items:center;gap:6px;font:0.72rem system-ui,sans-serif;color:${INK_SECONDARY};white-space:nowrap;`;
+  const label = document.createElement("span");
   label.textContent = labelText;
-  label.style.cssText = `color:${INK_SECONDARY};font:0.75rem system-ui,sans-serif;display:flex;justify-content:space-between;gap:6px;`;
   wrap.appendChild(label);
   const inputs = document.createElement("div");
-  inputs.style.cssText = "display:flex;align-items:center;gap:6px;";
+  inputs.style.cssText = "display:flex;align-items:center;gap:4px;";
   wrap.appendChild(inputs);
-  const notice = document.createElement("div");
-  notice.style.cssText = `color:${INK_MUTED};font:0.68rem system-ui,sans-serif;min-height:1em;`;
+  const notice = document.createElement("span");
+  notice.textContent = "ⓘ";
+  notice.style.cssText = `display:none;color:${INK_MUTED};cursor:help;font-size:0.85rem;`;
   wrap.appendChild(notice);
   return { wrap, label, inputs, notice };
+}
+
+// Shows/hides the row's "ⓘ" indicator and sets its tooltip text.
+function setNotice(notice, message) {
+  notice.title = message || "";
+  notice.style.display = message ? "inline" : "none";
 }
 
 /**
@@ -41,13 +52,9 @@ function row(labelText) {
  */
 export function createLiveDualControl(container, opts) {
   const { label, min, max, step, onChange } = opts;
-  const format = opts.format || ((v) => v.toFixed(2));
   let value = opts.value;
 
-  const { wrap, label: labelEl, inputs } = row(label);
-  const valueSpan = document.createElement("span");
-  valueSpan.textContent = format(value);
-  labelEl.appendChild(valueSpan);
+  const { wrap, inputs } = row(label);
 
   const slider = document.createElement("input");
   slider.type = "range";
@@ -55,13 +62,13 @@ export function createLiveDualControl(container, opts) {
   slider.max = String(max);
   slider.step = String(step);
   slider.value = String(value);
-  slider.style.flex = "1";
+  slider.style.width = "80px";
 
   const numberBox = document.createElement("input");
   numberBox.type = "number";
   numberBox.step = String(step);
   numberBox.value = String(value);
-  numberBox.style.cssText = "width:70px;background:#12151c;color:#e6e6e6;border:1px solid #2c2c2a;border-radius:3px;padding:2px 4px;";
+  numberBox.style.cssText = "width:52px;background:#12151c;color:#e6e6e6;border:1px solid #2c2c2a;border-radius:3px;padding:2px 4px;font:inherit;";
 
   inputs.appendChild(slider);
   inputs.appendChild(numberBox);
@@ -69,7 +76,6 @@ export function createLiveDualControl(container, opts) {
 
   function apply(v, source) {
     value = v;
-    valueSpan.textContent = format(value);
     if (source !== "slider") slider.value = String(value);
     if (source !== "number") numberBox.value = String(value);
     onChange(value);
@@ -111,10 +117,7 @@ export function createResolutionLadderControl(container, opts) {
   const sorted = points.slice().sort((a, b) => a - b);
   let value = opts.value;
 
-  const { wrap, label: labelEl, inputs, notice } = row(label);
-  const valueSpan = document.createElement("span");
-  valueSpan.textContent = format(value);
-  labelEl.appendChild(valueSpan);
+  const { wrap, inputs, notice } = row(label);
 
   const slider = document.createElement("input");
   slider.type = "range";
@@ -122,13 +125,13 @@ export function createResolutionLadderControl(container, opts) {
   slider.max = String(sorted.length - 1);
   slider.step = "1";
   slider.value = String(sorted.indexOf(value));
-  slider.style.flex = "1";
+  slider.style.width = "80px";
 
   const numberBox = document.createElement("input");
   numberBox.type = "number";
   numberBox.step = "0.01";
   numberBox.value = String(value);
-  numberBox.style.cssText = "width:70px;background:#12151c;color:#e6e6e6;border:1px solid #2c2c2a;border-radius:3px;padding:2px 4px;";
+  numberBox.style.cssText = "width:52px;background:#12151c;color:#e6e6e6;border:1px solid #2c2c2a;border-radius:3px;padding:2px 4px;font:inherit;";
 
   inputs.appendChild(slider);
   inputs.appendChild(numberBox);
@@ -140,16 +143,15 @@ export function createResolutionLadderControl(container, opts) {
 
   function applyExact(v) {
     value = v;
-    valueSpan.textContent = format(value);
     slider.value = String(sorted.indexOf(value));
     numberBox.value = String(value);
-    notice.textContent = "";
+    setNotice(notice, "");
     onChange(value, true);
   }
 
   function resolveTyped(typed) {
     if (floor !== undefined && typed < floor) {
-      notice.textContent = `Rejected: below the physical floor (${format(floor)}); the model doesn't converge there.`;
+      setNotice(notice, `Rejected: below the physical floor (${format(floor)}); the model doesn't converge there.`);
       numberBox.value = String(value); // revert display, keep last valid value active
       return;
     }
@@ -159,10 +161,9 @@ export function createResolutionLadderControl(container, opts) {
     }
     const snapped = nearest(typed);
     value = snapped;
-    valueSpan.textContent = format(value);
     slider.value = String(sorted.indexOf(snapped));
     numberBox.value = String(snapped);
-    notice.textContent = `Showing nearest precomputed value ${format(snapped)} — requested ${format(typed)} needs live MATLAB compute (not available: Tier 2 backend not yet built).`;
+    setNotice(notice, `Showing nearest precomputed value ${format(snapped)} — requested ${format(typed)} needs live MATLAB compute (not available: Tier 2 backend not yet built).`);
     onChange(value, false);
   }
 

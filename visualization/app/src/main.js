@@ -13,6 +13,8 @@ const STIFFNESS_FLOOR = 0.7 / 3;
 
 const statusEl = document.getElementById("status");
 const canvasWrap = document.getElementById("canvas-wrap");
+const wing2dWrap = document.getElementById("wing2d-wrap");
+const panelToggle = document.getElementById("panel-toggle");
 const timelinesWrap = document.getElementById("timelines-wrap");
 const wing2dCanvases = document.getElementById("wing2d-canvases");
 const histogramWrap = document.getElementById("histogram-wrap");
@@ -39,11 +41,26 @@ async function main() {
     let staFreq = manifest.encoding.staFreq;
     let sensorCount = 10;
 
+    // --- Left-panel view state, also hoisted so it survives loadAndMount (which tears
+    // down and recreates wing/wing2d on every stiffness/axis change): which panel is
+    // shown, and the 3D scene's current per-wing rotation (dragging shouldn't reset to
+    // 0,0 just because the user then changed the stiffness slider).
+    let show3d = true;
+    let yaw = 0;
+    let pitch = 0;
+
     // wing/wing2d/timelines/histogram are reassigned on every dataset (re)load --
     // declared with `let` so closures created below (pushThreshold, the sensor-count
     // control, wing's onFrame callback) always see the current instances, not whichever
     // ones existed at closure-creation time.
     let wing, wing2d, timelines, histogram, currentSet, currentPayload;
+
+    // Shared by both the 3D and 2D pickers so clicking the same physical sensor in
+    // either view lands on the same selection.
+    function selectSensor(sensorIdx1) {
+      timelines.setSensor(sensorIdx1 - 1);
+      histogram.setSensor(sensorIdx1 - 1);
+    }
 
     // computePFireAll recomputes P(fire) for all ~1300 sensors x 2 conditions in both
     // wing3d.js and wing2d.js on every call -- fires live on every slider drag frame, but
@@ -62,15 +79,20 @@ async function main() {
         nldGrad === manifest.encoding.nldGrad &&
         nldShift === manifest.encoding.nldShift &&
         staFreq === manifest.encoding.staFreq;
-      accuracyNotice.textContent = isDefault
-        ? ""
-        : `Approximate: the optimal-sensor overlay & this accuracy figure were computed by SSPOC (MATLAB) at β=${manifest.encoding.nldShift}, α=${manifest.encoding.nldGrad}, ω=${manifest.encoding.staFreq} — they don't update with these live β/α/ω controls (that would need re-running SSPOC, a Tier 2 job).`;
+      if (isDefault) {
+        accuracyNotice.style.display = "none";
+        accuracyNotice.title = "";
+      } else {
+        accuracyNotice.style.display = "inline";
+        accuracyNotice.title = `Approximate: the optimal-sensor overlay & this accuracy figure were computed by SSPOC (MATLAB) at β=${manifest.encoding.nldShift}, α=${manifest.encoding.nldGrad}, ω=${manifest.encoding.staFreq} — they don't update with these live β/α/ω controls (that would need re-running SSPOC, a Tier 2 job).`;
+      }
     }
 
     // --- Loads (or reloads, on stiffness/axis change) one precomputed set. Tears down
     // the previous instances first: wing3d.js runs a persistent requestAnimationFrame
-    // loop tied to its own WebGL context, so it needs an explicit dispose(); the other
-    // three modules have no persistent loop, so clearing their containers is enough.
+    // loop tied to its own WebGL context, so it needs an explicit dispose(); timelines.js
+    // and histogram.js now hold a ResizeObserver each and also need disposing; wing2d.js
+    // has no persistent resource, clearing its container is enough.
     async function loadAndMount(setEntry) {
       statusEl.textContent = `Loading ${setEntry.id}…`;
       const payload = await loadSet("data", manifest, setEntry.file);
@@ -78,6 +100,8 @@ async function main() {
       currentPayload = payload;
 
       wing?.dispose();
+      timelines?.dispose();
+      histogram?.dispose();
       canvasWrap.innerHTML = "";
       timelinesWrap.innerHTML = "";
       wing2dCanvases.innerHTML = "";
@@ -88,18 +112,18 @@ async function main() {
       timelines = createTimelines(timelinesWrap, manifest, payload, computePFire);
       histogram = createHistogram(histogramWrap, manifest, payload);
 
-      wing2d = createWing2D(wing2dCanvases, manifest, payload, {
-        onSelectSensor: (sensorIdx1) => {
-          timelines.setSensor(sensorIdx1 - 1);
-          histogram.setSensor(sensorIdx1 - 1);
-        },
-      });
+      wing2d = createWing2D(wing2dCanvases, manifest, payload, { onSelectSensor: selectSensor });
 
       wing = createWingScene(canvasWrap, manifest, payload, {
         onFrame: (frameIdx, timeMs) => {
           timelines.setPlayhead(timeMs);
           const strainFrameIdx = Math.floor((frameIdx * payload.strainFrames) / payload.frames);
           wing2d.setFrame(strainFrameIdx);
+        },
+        onSelectSensor: selectSensor,
+        onRotate: (newYaw, newPitch) => {
+          yaw = newYaw;
+          pitch = newPitch;
         },
       });
 
@@ -111,12 +135,33 @@ async function main() {
       histogram.setThreshold(nldGrad, nldShift, staFreq);
       wing.setSensorCount(sensorCount);
       wing2d.setSensorCount(sensorCount);
+      wing.setRotation(yaw, pitch);
+      wing.setVisible(show3d);
+      wing2d.setVisible(!show3d);
       accuracyN.textContent = String(sensorCount);
       accuracyValue.textContent = `${(payload.accuracyBySensorCount[sensorCount - 1] * 100).toFixed(0)}%`;
       updateAccuracyNotice();
     }
 
     await loadAndMount(firstSet);
+
+    // --- Left-panel toggle: 3D wings <-> 2D sensor map. Both stay mounted (and the 3D
+    // scene's rAF loop -- the app's shared animation clock -- keeps running regardless,
+    // see wing3d.js's setVisible), only the expensive per-frame draw work is skipped for
+    // whichever one is hidden.
+    function applyPanelVisibility() {
+      canvasWrap.style.display = show3d ? "" : "none";
+      wing2dWrap.style.display = show3d ? "none" : "";
+      wing.setVisible(show3d);
+      wing2d.setVisible(!show3d);
+      if (show3d) wing.resize(); // ResizeObserver delivery for none->block is async; avoid one badly-sized frame
+      panelToggle.textContent = show3d ? "⇄ 2D view" : "⇄ 3D view";
+    }
+    panelToggle.addEventListener("click", () => {
+      show3d = !show3d;
+      applyPanelVisibility();
+    });
+    applyPanelVisibility();
 
     colorModeSelect.addEventListener("change", () => {
       wing.setColorMode(colorModeSelect.value);
@@ -137,7 +182,7 @@ async function main() {
         axisSelect.value = currentSet.axis;
         return;
       }
-      loadAndMount(match);
+      loadAndMount(match).then(applyPanelVisibility);
     });
 
     // Neural threshold (β) is a genuine independent variable of the paper (title:
@@ -206,7 +251,7 @@ async function main() {
           statusEl.textContent = `Stiffness factor ${v} isn't precomputed at axis "${currentSet.axis}" — showing the previous set. ${quickNote}`;
           return;
         }
-        loadAndMount(match);
+        loadAndMount(match).then(applyPanelVisibility);
       },
     });
   } catch (err) {

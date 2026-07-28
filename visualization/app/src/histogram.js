@@ -31,8 +31,7 @@ const INK_SECONDARY = "#c3c2b7";
 const INK_MUTED = "#898781";
 const GRIDLINE = "#2c2c2a";
 
-const W = 900;
-const H = 200;
+const H = 160;
 const PAD = { top: 10, right: 10, bottom: 26, left: 34 };
 const N_REPS = 300; // simulated wingbeats per PSTH draw -- paper uses "hundreds"
 
@@ -56,8 +55,13 @@ export function createHistogram(container, manifest, payload) {
 
   const note = document.createElement("div");
   note.id = "histogram-note";
-  note.style.cssText = `color:${INK_MUTED};font:0.68rem system-ui,sans-serif;margin-bottom:6px;max-width:${W}px;`;
+  note.style.cssText = `color:${INK_MUTED};font:0.68rem system-ui,sans-serif;margin-bottom:6px;max-width:100%;`;
   root.appendChild(note);
+
+  // W tracks the container's actual width (updated by the ResizeObserver
+  // below) so the chart fills whatever space the bottom row has, rather than
+  // being fixed-px and either letterboxed or overflowing.
+  let W = 900;
 
   const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", height: `${H}px` });
   svg.style.display = "block";
@@ -85,25 +89,34 @@ export function createHistogram(container, manifest, payload) {
   let nldShift = manifest.encoding.nldShift;
   let staFreq = manifest.encoding.staFreq;
 
-  function render() {
-    svg.textContent = "";
+  // recompute() does the stochastic sampling (samplePSTH draws fresh random
+  // spike trains every call) and caches the result in `counts`. render()
+  // only ever draws from that cache -- kept separate so a resize (which
+  // should just redraw at a new width) never re-randomizes the bars, which
+  // would otherwise visibly shimmer while dragging a window edge.
+  let counts = null;
+  let maxCount = 1;
 
-    const refPerSamples = Math.round(
-      (manifest.encoding.refPer * manifest.encoding.sampFreq) / 1000
-    );
-
-    const counts = {};
-    let maxCount = 1;
+  function recompute() {
+    const refPerSamples = Math.round((manifest.encoding.refPer * manifest.encoding.sampFreq) / 1000);
+    counts = {};
+    maxCount = 1;
     for (const cond of ["flap", "rotate"]) {
       const strainRow = payload.conditions[cond].strain[sensorIdx];
       const pfire = computePFire(strainRow, manifest.encoding, nldGrad, nldShift, staFreq);
       counts[cond] = samplePSTH(pfire, refPerSamples, N_REPS);
       maxCount = Math.max(maxCount, ...counts[cond]);
     }
-
     note.textContent =
       `Sensor #${sensorIdx + 1}, ${N_REPS} simulated wingbeats per condition (client-side, refractory period ` +
       `${manifest.encoding.refPer}ms), spike trains sampled from the real P(fire) curve above.`;
+    render();
+  }
+
+  function render() {
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.textContent = "";
+    if (!counts) return;
 
     const nBins = counts.flap.length;
     const plotW = W - PAD.left - PAD.right;
@@ -164,18 +177,33 @@ export function createHistogram(container, manifest, payload) {
     }
   }
 
-  render();
+  const resizeObserver = new ResizeObserver((entries) => {
+    const w = entries[0].contentRect.width;
+    if (w > 0 && Math.abs(w - W) > 1) {
+      W = w;
+      render(); // draw-only -- does not re-sample counts
+    }
+  });
+  resizeObserver.observe(root);
+
+  recompute();
 
   return {
     setSensor(newSensorIdx) {
       sensorIdx = newSensorIdx;
-      render();
+      recompute();
     },
     setThreshold(newNldGrad, newNldShift, newStaFreq) {
       nldGrad = newNldGrad;
       nldShift = newNldShift;
       staFreq = newStaFreq;
-      render();
+      recompute();
+    },
+    // main.js recreates this on every dataset reload (every stiffness/axis
+    // change), so the ResizeObserver must be explicitly torn down or it
+    // keeps observing a detached `root` indefinitely.
+    dispose() {
+      resizeObserver.disconnect();
     },
   };
 }

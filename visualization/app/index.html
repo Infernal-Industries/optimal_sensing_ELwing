@@ -5,74 +5,102 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Wing sensing — optimal_sensing_ELwing</title>
 <style>
-  html, body { margin: 0; background: #0b0e14; color: #e6e6e6; font-family: system-ui, sans-serif; }
-  #app { display: flex; flex-direction: column; min-height: 100vh; }
-  #status { padding: 0.5rem 1rem; font-size: 0.85rem; color: #9aa4b2; }
-  /* Fixed height, not flex:1 -- with this many sections now below it
-     (controls, timelines, 2D map, histogram), letting the canvas absorb
-     all leftover viewport height pushed everything else into a large,
-     confusing empty gap on tall viewports. The page scrolls normally now. */
-  #canvas-wrap { height: 420px; flex: none; position: relative; }
-  canvas { display: block; }
-  #controls {
-    display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap;
-    padding: 0.5rem 1rem; background: #12151c; border-top: 1px solid #2c2c2a;
+  html, body {
+    margin: 0; height: 100%; overflow: hidden; /* no-scroll dashboard: everything fits one viewport */
+    background: #0b0e14; color: #e6e6e6; font-family: system-ui, sans-serif;
+  }
+  #app { height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }
+
+  /* --- Top bar: status, color/axis selects, sliders, accuracy -- all one line,
+     wrapping only if the viewport is unusually narrow. */
+  #topbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 1rem;
+    padding: 0.4rem 0.75rem; background: #12151c; border-bottom: 1px solid #2c2c2a;
     font-size: 0.8rem; color: #c3c2b7;
   }
-  #controls label { display: flex; align-items: center; gap: 0.4rem; }
-  #controls input[type="range"] { width: 140px; }
-  #param-controls {
-    display: flex; flex-wrap: wrap; gap: 1.25rem;
-    padding: 0.6rem 1rem; background: #12151c; border-top: 1px solid #2c2c2a;
-  }
-  #accuracy-readout {
-    padding: 0.5rem 1rem; background: #12151c; border-top: 1px solid #2c2c2a;
-    font-size: 0.8rem; color: #c3c2b7;
-  }
+  #status { color: #9aa4b2; white-space: nowrap; }
+  #controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  #controls label { display: flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
+  #param-controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  #accuracy-readout { display: flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
   #accuracy-value { color: #ffffff; font-weight: 600; }
-  #accuracy-notice { color: #898781; font-size: 0.72rem; margin-top: 2px; }
-  #timelines-wrap {
-    display: flex; gap: 1rem; padding: 0.5rem 1rem 1rem; background: #12151c;
-    flex-wrap: wrap;
+  #accuracy-notice {
+    display: none; color: #898781; cursor: help; font-size: 0.85rem;
   }
-  #timelines-wrap > div { flex: 1; min-width: 320px; }
+
+  /* --- Main row: left panel (3D/2D toggle) + right panel (charts). Both
+     min-height:0/min-width:0 so they can shrink below content size instead of
+     overflowing the fixed-height grid row (the #1 way a no-scroll layout fails). */
+  #main { display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
+
+  #left-panel {
+    position: relative; min-width: 0; min-height: 0; overflow: hidden;
+    background: #0b0e14; border-right: 1px solid #2c2c2a;
+  }
+  #canvas-wrap, #wing2d-wrap { position: absolute; inset: 0; }
   #wing2d-wrap {
-    padding: 0.5rem 1rem 1rem; background: #0b0e14; border-top: 1px solid #2c2c2a;
+    display: flex; align-items: center; justify-content: center; gap: 1.5rem;
+    padding: 0.5rem;
   }
-  #wing2d-title { color: #c3c2b7; font: 0.75rem system-ui, sans-serif; margin-bottom: 4px; }
-  #histogram-wrap { padding: 0.5rem 1rem 1rem; background: #0b0e14; }
+  #wing2d-canvases { display: flex; gap: 1.5rem; height: 100%; }
+  /* title row (auto height) + canvas (flex:1, fills the REST -- not height:100%,
+     which would overflow the column by the title's own height) */
+  #wing2d-canvases > div { display: flex; flex-direction: column; align-items: center; height: 100%; min-width: 0; min-height: 0; }
+  #wing2d-canvases canvas { flex: 1; min-height: 0; width: auto; image-rendering: pixelated; cursor: pointer; }
+
+  #panel-toggle {
+    position: absolute; left: 0.6rem; bottom: 0.6rem; z-index: 2;
+    background: #12151c; color: #e6e6e6; border: 1px solid #3d5166; border-radius: 4px;
+    padding: 4px 10px; font: 0.75rem system-ui, sans-serif; cursor: pointer;
+  }
+
+  #right-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  #timelines-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0.5rem; padding: 0.5rem 1rem; }
+  #timelines-wrap > div { flex: 1; min-height: 0; position: relative; }
+
+  /* --- Bottom row: PSTH histogram, full width, fixed (not flex:1) so it never
+     eats space the two panels above need -- its own content sets the height. */
+  #histogram-wrap { padding: 0.4rem 1rem 0.6rem; background: #0b0e14; border-top: 1px solid #2c2c2a; }
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="status">Loading…</div>
-  <div id="canvas-wrap"></div>
-  <div id="controls">
-    <label>
-      Color by:
-      <select id="color-mode">
-        <option value="strain">Strain</option>
-        <option value="pfire">P(fire)</option>
-      </select>
-    </label>
-    <label>
-      Rotation axis:
-      <select id="axis-select">
-        <option value="yaw">yaw</option>
-        <option value="pitch">pitch</option>
-        <option value="roll">roll</option>
-      </select>
-    </label>
+  <div id="topbar">
+    <span id="status">Loading…</span>
+    <div id="controls">
+      <label>
+        Color by:
+        <select id="color-mode">
+          <option value="strain">Strain</option>
+          <option value="pfire">P(fire)</option>
+        </select>
+      </label>
+      <label>
+        Rotation axis:
+        <select id="axis-select">
+          <option value="yaw">yaw</option>
+          <option value="pitch">pitch</option>
+          <option value="roll">roll</option>
+        </select>
+      </label>
+    </div>
+    <div id="param-controls"></div>
+    <div id="accuracy-readout">
+      <span>Top-<span id="accuracy-n"></span> accuracy: <span id="accuracy-value"></span></span>
+      <span id="accuracy-notice">ⓘ</span>
+    </div>
   </div>
-  <div id="param-controls"></div>
-  <div id="accuracy-readout">
-    Classification accuracy (top-<span id="accuracy-n"></span> sensors): <span id="accuracy-value"></span>
-    <div id="accuracy-notice"></div>
-  </div>
-  <div id="timelines-wrap"></div>
-  <div id="wing2d-wrap">
-    <div id="wing2d-title">2D sensor map (click a cell to inspect that sensor's timeline)</div>
-    <div id="wing2d-canvases"></div>
+  <div id="main">
+    <div id="left-panel">
+      <div id="canvas-wrap"></div>
+      <div id="wing2d-wrap">
+        <div id="wing2d-canvases"></div>
+      </div>
+      <button id="panel-toggle" type="button">⇄ 2D view</button>
+    </div>
+    <div id="right-panel">
+      <div id="timelines-wrap"></div>
+    </div>
   </div>
   <div id="histogram-wrap"></div>
 </div>
