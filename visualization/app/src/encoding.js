@@ -85,6 +85,10 @@ export function buildSTAFilter(staFreq, staWidth, staDelay, sampFreq) {
  * @param {number} [staFreq] - override manifest.encoding.staFreq (the omega/filter-frequency control);
  *   passing a value different from enc.staFreq rebuilds the filter live via buildSTAFilter
  *   instead of reusing the exported (fixed) enc.staFilt taps.
+ * @param {number[]} [staFiltOverride] - precomputed filter taps to use directly, skipping the
+ *   staFreq-vs-enc.staFreq check/rebuild above. Callers that process many rows with the same
+ *   staFreq (computePFireAll) should build the filter once and pass it here, rather than
+ *   rebuilding it from scratch on every row.
  * @returns {number[]} length strainFrames, P(fire) in [0,1]
  */
 export function computePFire(
@@ -92,16 +96,29 @@ export function computePFire(
   enc,
   nldGrad = enc.nldGrad,
   nldShift = enc.nldShift,
-  staFreq = enc.staFreq
+  staFreq = enc.staFreq,
+  staFiltOverride
 ) {
-  const staFilt = staFreq === enc.staFreq ? enc.staFilt : buildSTAFilter(staFreq, enc.staWidth, enc.staDelay, enc.sampFreq);
+  const staFilt = staFiltOverride ?? (staFreq === enc.staFreq ? enc.staFilt : buildSTAFilter(staFreq, enc.staWidth, enc.staDelay, enc.sampFreq));
   const filtered = convValid(strainRow, staFilt);
   const norm = enc.normalizeVal * enc.subSamp;
   return filtered.map((v) => sigmoid(nldGrad * (v / norm - nldShift)));
 }
 
+// wing3d.js and wing2d.js both call computePFireAll on the exact same
+// payload.conditions.<cond>.strain array with the exact same (nldGrad,
+// nldShift, staFreq) whenever the threshold is applied -- computing the
+// identical ~1300-sensor result twice back-to-back. Cache the last result per
+// strain array (WeakMap so it's naturally dropped when a dataset reload
+// replaces the array) and reuse it when params haven't changed since.
+const pfireAllCache = new WeakMap();
+
 /**
- * Convenience: P(fire) for every sensor in a condition's strain block.
+ * Convenience: P(fire) for every sensor in a condition's strain block. Builds the STA filter
+ * ONCE (not once per sensor row -- buildSTAFilter is nontrivial, ~190 trig/exp calls, and with
+ * ~1300 sensors this was previously rebuilding the identical filter over a thousand times per
+ * call when staFreq differed from the exported default). Also memoizes the whole result per
+ * strain array + params (see pfireAllCache above).
  * @param {number[][]} strain - payload.conditions.<cond>.strain
  * @param {object} enc - manifest.encoding
  * @param {number} [nldGrad]
@@ -109,8 +126,15 @@ export function computePFire(
  * @param {number} [staFreq]
  * @returns {number[][]} [sensorIdx][frame]
  */
-export function computePFireAll(strain, enc, nldGrad, nldShift, staFreq) {
-  return strain.map((row) => computePFire(row, enc, nldGrad, nldShift, staFreq));
+export function computePFireAll(strain, enc, nldGrad = enc.nldGrad, nldShift = enc.nldShift, staFreq = enc.staFreq) {
+  const cached = pfireAllCache.get(strain);
+  if (cached && cached.nldGrad === nldGrad && cached.nldShift === nldShift && cached.staFreq === staFreq) {
+    return cached.result;
+  }
+  const staFilt = staFreq === enc.staFreq ? enc.staFilt : buildSTAFilter(staFreq, enc.staWidth, enc.staDelay, enc.sampFreq);
+  const result = strain.map((row) => computePFire(row, enc, nldGrad, nldShift, staFreq, staFilt));
+  pfireAllCache.set(strain, { nldGrad, nldShift, staFreq, result });
+  return result;
 }
 
 /**

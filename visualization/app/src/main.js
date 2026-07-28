@@ -141,26 +141,35 @@ async function main() {
       loadAndMount(match);
     });
 
-    // β/α/ω: confirm-gated -- each stages into its own display on every drag/edit, but
-    // none of them fire onChange individually. Committed together by ONE shared Apply
-    // button below (with E), so pressing it recomputes the threshold once, not 3x. The
-    // slider snaps in ~10 coarse steps across its range -- matching Wing stiffness
+    // β/α/ω/E share ONE bordered group (confirmGroup) with ONE Apply button inside it --
+    // each control still stages into its own display on every drag/edit, but none of
+    // them fire onChange individually; pressing the shared Apply button commits all
+    // four together (so the threshold recomputes once, not 3x, and any stiffness change
+    // reloads once). `boxed: false` on each control below suppresses their individual
+    // bordered box (see controls.js) since confirmGroup itself provides the border.
+    const confirmGroup = document.createElement("div");
+    confirmGroup.style.cssText =
+      "display:flex;flex-wrap:wrap;align-items:flex-end;gap:1rem;border:1px solid #3d5166;border-radius:6px;padding:8px 10px;background:#161a22;";
+    paramControls.appendChild(confirmGroup);
+
+    // Slider snaps in ~10 coarse steps across its range -- matching Wing stiffness
     // factor E's ~10-point ladder feel -- rather than smooth continuous drag. The number
     // box is unrestricted (step="any" in controls.js), so exact/in-between values are
     // only reachable by typing, never by dragging.
-    const betaControl = createLiveDualControl(paramControls, {
+    const betaControl = createLiveDualControl(confirmGroup, {
       label: "Neural threshold (β)",
       min: 0.05,
       max: 0.7,
       step: 0.07, // ~10 stops across [0.05, 0.7]
       value: nldShift,
       confirm: true,
+      boxed: false,
       onChange: (v) => {
         nldShift = v;
         pushThreshold();
       },
     });
-    const alphaControl = createLiveDualControl(paramControls, {
+    const alphaControl = createLiveDualControl(confirmGroup, {
       label: "Slope (α)",
       min: 1,
       max: 100,
@@ -168,18 +177,20 @@ async function main() {
       value: nldGrad,
       format: (v) => v.toFixed(0),
       confirm: true,
+      boxed: false,
       onChange: (v) => {
         nldGrad = v;
         pushThreshold();
       },
     });
-    const omegaControl = createLiveDualControl(paramControls, {
+    const omegaControl = createLiveDualControl(confirmGroup, {
       label: "Filter frequency (ω)",
       min: 0,
       max: 5,
       step: 0.5, // 11 stops across [0, 5]
       value: staFreq,
       confirm: true,
+      boxed: false,
       onChange: (v) => {
         staFreq = v;
         pushThreshold();
@@ -220,12 +231,13 @@ async function main() {
     // entry per axis, so raw stiffnessFactor values repeat 3x) at the current axis;
     // picking a grid point reloads the matching precomputed set.
     const uniqueStiffness = [...new Set(manifest.sets.map((s) => s.stiffnessFactor))];
-    const stiffnessControl = createResolutionLadderControl(paramControls, {
+    const stiffnessControl = createResolutionLadderControl(confirmGroup, {
       label: "Wing stiffness factor (E)",
       points: uniqueStiffness,
       value: firstSet.stiffnessFactor,
       floor: STIFFNESS_FLOOR,
       confirm: true,
+      boxed: false,
       onChange: (v) => {
         const match = manifest.sets.find((s) => s.stiffnessFactor === v && s.axis === currentSet.axis);
         if (!match) {
@@ -236,13 +248,11 @@ async function main() {
       },
     });
 
-    // One shared Apply button commits all four confirm-gated controls (β, α, ω, E)
-    // together -- pressing it fires each control's onChange in turn (each control's own
-    // pushThreshold/loadAndMount body is unchanged; only the button that triggers them
-    // is now singular instead of one per control).
-    const applyRow = document.createElement("div");
-    applyRow.style.cssText = "display:flex;align-items:center;min-width:220px;";
-    applyRow.appendChild(
+    // One shared Apply button, inside confirmGroup alongside the four controls it
+    // commits together -- pressing it fires each control's onChange in turn (each
+    // control's own pushThreshold/loadAndMount body is unchanged; only the button that
+    // triggers them is now singular instead of one per control).
+    confirmGroup.appendChild(
       makeApplyButton(() => {
         betaControl.commit();
         alphaControl.commit();
@@ -250,7 +260,6 @@ async function main() {
         stiffnessControl.commit();
       }, "Apply parameter changes")
     );
-    paramControls.appendChild(applyRow);
   } catch (err) {
     statusEl.textContent = `Failed to load: ${err.message}`;
     console.error(err);

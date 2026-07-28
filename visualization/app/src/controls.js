@@ -62,16 +62,19 @@ export function makeApplyButton(onClick, label = "Apply") {
  *   which main.js wires to one shared Apply button covering all confirm-gated controls.
  *   Use for params whose consumers are too expensive to recompute on every drag-frame
  *   'input' event (e.g. β/α/ω, which trigger a full P(fire) recompute over ~1300
- *   sensors). Also draws a bordered box around the control and makes the slider snap in
- *   coarse steps (per `step`) -- the number box stays free-entry at any precision
- *   regardless, so exact/in-between values are only reachable by typing, never dragging.
+ *   sensors). Also makes the slider snap in coarse steps (per `step`) -- the number box
+ *   stays free-entry at any precision regardless, so exact/in-between values are only
+ *   reachable by typing, never dragging.
+ *   boxed (default: same as confirm): draws a bordered box around this control's row.
+ *   Pass false when several confirm-gated controls share one outer bordered container
+ *   (with a single Apply button) elsewhere, so each control doesn't also draw its own.
  */
 export function createLiveDualControl(container, opts) {
-  const { label, min, max, step, onChange, confirm = false } = opts;
+  const { label, min, max, step, onChange, confirm = false, boxed = confirm } = opts;
   const format = opts.format || ((v) => v.toFixed(2));
   let value = opts.value;
 
-  const { wrap, label: labelEl, inputs } = row(label, confirm);
+  const { wrap, label: labelEl, inputs } = row(label, boxed);
   const valueSpan = document.createElement("span");
   valueSpan.textContent = format(value);
   labelEl.appendChild(valueSpan);
@@ -149,15 +152,18 @@ export function createLiveDualControl(container, opts) {
  *   invokes the returned `commit()` method (main.js's shared Apply button). Use when
  *   onChange triggers something too expensive to run per grid-point while dragging
  *   (e.g. wing stiffness E, which reloads a whole precomputed dataset over the network).
+ *   boxed (default: same as confirm): draws a bordered box around this control's row;
+ *   pass false when grouped into one shared bordered container elsewhere (see
+ *   createLiveDualControl's matching option).
  */
 export function createResolutionLadderControl(container, opts) {
-  const { label, points, floor, onChange, confirm = false } = opts;
+  const { label, points, floor, onChange, confirm = false, boxed = confirm } = opts;
   const format = opts.format || ((v) => v.toFixed(2));
   const sorted = points.slice().sort((a, b) => a - b);
   let value = opts.value;
   let pendingExact = true; // isExact flag for whatever `value` currently holds, applied at commit time
 
-  const { wrap, label: labelEl, inputs, notice } = row(label, confirm);
+  const { wrap, label: labelEl, inputs, notice } = row(label, boxed);
   const valueSpan = document.createElement("span");
   valueSpan.textContent = format(value);
   labelEl.appendChild(valueSpan);
