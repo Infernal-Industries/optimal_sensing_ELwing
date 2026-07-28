@@ -4,7 +4,7 @@ import { createTimelines } from "./timelines.js";
 import { createWing2D } from "./wing2d.js";
 import { createHistogram } from "./histogram.js";
 import { computePFire } from "./encoding.js";
-import { createLiveDualControl, createResolutionLadderControl } from "./controls.js";
+import { createLiveDualControl, createResolutionLadderControl, makeApplyButton } from "./controls.js";
 
 // Physical floor for wing stiffness (Plan §4/§7): the Euler-Lagrange model
 // doesn't converge below ~0.7 GPa; stiffness factor 1 = 3 GPa, so the floor
@@ -141,12 +141,14 @@ async function main() {
       loadAndMount(match);
     });
 
-    // β/α/ω: confirm-gated (Apply button, see pushThreshold's comment above), and the
-    // slider now snaps in ~10 coarse steps across its range -- matching Wing stiffness
+    // β/α/ω: confirm-gated -- each stages into its own display on every drag/edit, but
+    // none of them fire onChange individually. Committed together by ONE shared Apply
+    // button below (with E), so pressing it recomputes the threshold once, not 3x. The
+    // slider snaps in ~10 coarse steps across its range -- matching Wing stiffness
     // factor E's ~10-point ladder feel -- rather than smooth continuous drag. The number
     // box is unrestricted (step="any" in controls.js), so exact/in-between values are
     // only reachable by typing, never by dragging.
-    createLiveDualControl(paramControls, {
+    const betaControl = createLiveDualControl(paramControls, {
       label: "Neural threshold (β)",
       min: 0.05,
       max: 0.7,
@@ -158,7 +160,7 @@ async function main() {
         pushThreshold();
       },
     });
-    createLiveDualControl(paramControls, {
+    const alphaControl = createLiveDualControl(paramControls, {
       label: "Slope (α)",
       min: 1,
       max: 100,
@@ -171,7 +173,7 @@ async function main() {
         pushThreshold();
       },
     });
-    createLiveDualControl(paramControls, {
+    const omegaControl = createLiveDualControl(paramControls, {
       label: "Filter frequency (ω)",
       min: 0,
       max: 5,
@@ -218,7 +220,7 @@ async function main() {
     // entry per axis, so raw stiffnessFactor values repeat 3x) at the current axis;
     // picking a grid point reloads the matching precomputed set.
     const uniqueStiffness = [...new Set(manifest.sets.map((s) => s.stiffnessFactor))];
-    createResolutionLadderControl(paramControls, {
+    const stiffnessControl = createResolutionLadderControl(paramControls, {
       label: "Wing stiffness factor (E)",
       points: uniqueStiffness,
       value: firstSet.stiffnessFactor,
@@ -233,6 +235,22 @@ async function main() {
         loadAndMount(match);
       },
     });
+
+    // One shared Apply button commits all four confirm-gated controls (β, α, ω, E)
+    // together -- pressing it fires each control's onChange in turn (each control's own
+    // pushThreshold/loadAndMount body is unchanged; only the button that triggers them
+    // is now singular instead of one per control).
+    const applyRow = document.createElement("div");
+    applyRow.style.cssText = "display:flex;align-items:center;min-width:220px;";
+    applyRow.appendChild(
+      makeApplyButton(() => {
+        betaControl.commit();
+        alphaControl.commit();
+        omegaControl.commit();
+        stiffnessControl.commit();
+      }, "Apply parameter changes")
+    );
+    paramControls.appendChild(applyRow);
   } catch (err) {
     statusEl.textContent = `Failed to load: ${err.message}`;
     console.error(err);

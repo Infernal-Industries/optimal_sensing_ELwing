@@ -37,12 +37,13 @@ function row(labelText, boxed = false) {
 
 // Confirm-gated controls (opts.confirm) stage slider/number-box edits into the
 // displayed value immediately (cheap) but withhold the expensive onChange call
-// until this Apply button is clicked -- for params whose consumer recompute is
-// too heavy to run on every drag-frame 'input' event.
-function makeApplyButton(onClick) {
+// until commit() is called -- driven by one shared Apply button in main.js,
+// not a per-control button, so committing several staged params (β/α/ω/E)
+// only triggers their recomputes/reloads once, together, per click.
+export function makeApplyButton(onClick, label = "Apply") {
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.textContent = "Apply";
+  btn.textContent = label;
   btn.style.cssText =
     "background:#2c3e50;color:#e6e6e6;border:1px solid #3d5166;border-radius:3px;padding:2px 8px;font:0.7rem system-ui,sans-serif;cursor:pointer;flex-shrink:0;";
   btn.addEventListener("click", onClick);
@@ -56,13 +57,14 @@ function makeApplyButton(onClick) {
  * @param {{label:string, min:number, max:number, step:number, value:number,
  *   format?:(v:number)=>string, onChange:(v:number)=>void, confirm?:boolean}} opts
  *   confirm (default false): if true, dragging the slider/editing the number box only
- *   updates the displayed value -- onChange (and whatever expensive recompute it
- *   triggers) only fires when the Apply button next to the inputs is clicked. Use for
- *   params whose consumers are too expensive to recompute on every drag-frame 'input'
- *   event (e.g. β/α/ω, which trigger a full P(fire) recompute over ~1300 sensors). Also
- *   draws a bordered box around the control and makes the slider snap in coarse steps
- *   (per `step`) -- the number box stays free-entry at any precision regardless, so
- *   exact/in-between values are only reachable by typing, never by dragging.
+ *   updates the displayed (staged) value -- onChange (and whatever expensive recompute
+ *   it triggers) only fires when the caller invokes the returned `commit()` method,
+ *   which main.js wires to one shared Apply button covering all confirm-gated controls.
+ *   Use for params whose consumers are too expensive to recompute on every drag-frame
+ *   'input' event (e.g. β/α/ω, which trigger a full P(fire) recompute over ~1300
+ *   sensors). Also draws a bordered box around the control and makes the slider snap in
+ *   coarse steps (per `step`) -- the number box stays free-entry at any precision
+ *   regardless, so exact/in-between values are only reachable by typing, never dragging.
  */
 export function createLiveDualControl(container, opts) {
   const { label, min, max, step, onChange, confirm = false } = opts;
@@ -90,12 +92,12 @@ export function createLiveDualControl(container, opts) {
 
   inputs.appendChild(slider);
   inputs.appendChild(numberBox);
-  if (confirm) inputs.appendChild(makeApplyButton(() => commit()));
   container.appendChild(wrap);
 
   // stage() updates the displayed value only (cheap: DOM text/attrs). commit()
   // additionally fires onChange. Non-confirm controls stage+commit together on
-  // every input; confirm controls stage on every input but only commit on Apply.
+  // every input; confirm controls stage on every input, and only commit when
+  // the caller (main.js's single shared Apply button) calls .commit().
   function stage(v, source) {
     value = v;
     valueSpan.textContent = format(value);
@@ -125,6 +127,7 @@ export function createLiveDualControl(container, opts) {
     getValue() {
       return value;
     },
+    commit,
   };
 }
 
@@ -141,8 +144,9 @@ export function createLiveDualControl(container, opts) {
  * @param {HTMLElement} container
  * @param {{label:string, points:number[], value:number, floor?:number,
  *   format?:(v:number)=>string, onChange:(v:number, isExact:boolean)=>void, confirm?:boolean}} opts
- *   confirm (default false): if true, moving the slider only updates the displayed value
- *   (and any snap/reject notice) -- onChange only fires on the Apply button. Use when
+ *   confirm (default false): if true, moving the slider only updates the displayed
+ *   (staged) value (and any snap/reject notice) -- onChange only fires when the caller
+ *   invokes the returned `commit()` method (main.js's shared Apply button). Use when
  *   onChange triggers something too expensive to run per grid-point while dragging
  *   (e.g. wing stiffness E, which reloads a whole precomputed dataset over the network).
  */
@@ -174,7 +178,6 @@ export function createResolutionLadderControl(container, opts) {
 
   inputs.appendChild(slider);
   inputs.appendChild(numberBox);
-  if (confirm) inputs.appendChild(makeApplyButton(() => onChange(value, pendingExact)));
   container.appendChild(wrap);
 
   function nearest(v) {
@@ -232,6 +235,9 @@ export function createResolutionLadderControl(container, opts) {
     },
     getValue() {
       return value;
+    },
+    commit() {
+      onChange(value, pendingExact);
     },
   };
 }
