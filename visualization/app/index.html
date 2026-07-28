@@ -11,13 +11,16 @@
   }
   #app { height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }
 
-  /* --- Top bar: status, color/axis selects, sliders, accuracy -- all one line,
-     wrapping only if the viewport is unusually narrow. */
+  /* --- Top bar: controls/sliders/accuracy on one line, with the status text
+     (which varies a lot in length -- "E1.40_pitch · stiffness factor 1.4 ·
+     axis pitch" vs shorter strings) on its OWN line below, so its length
+     changing never shifts the sliders/selects above it. */
   #topbar {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 1rem;
+    display: flex; flex-direction: column; gap: 0.3rem;
     padding: 0.4rem 0.75rem; background: #12151c; border-bottom: 1px solid #2c2c2a;
     font-size: 0.8rem; color: #c3c2b7;
   }
+  #topbar-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; }
   #status { color: #9aa4b2; white-space: nowrap; }
   #controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
   #controls label { display: flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
@@ -66,29 +69,31 @@
 <body>
 <div id="app">
   <div id="topbar">
+    <div id="topbar-controls">
+      <div id="controls">
+        <label>
+          Color by:
+          <select id="color-mode">
+            <option value="strain">Strain</option>
+            <option value="pfire">P(fire)</option>
+          </select>
+        </label>
+        <label>
+          Rotation axis:
+          <select id="axis-select">
+            <option value="yaw">yaw</option>
+            <option value="pitch">pitch</option>
+            <option value="roll">roll</option>
+          </select>
+        </label>
+      </div>
+      <div id="param-controls"></div>
+      <div id="accuracy-readout">
+        <span>Top-<span id="accuracy-n"></span> accuracy: <span id="accuracy-value"></span></span>
+        <span id="accuracy-notice">ⓘ</span>
+      </div>
+    </div>
     <span id="status">Loading…</span>
-    <div id="controls">
-      <label>
-        Color by:
-        <select id="color-mode">
-          <option value="strain">Strain</option>
-          <option value="pfire">P(fire)</option>
-        </select>
-      </label>
-      <label>
-        Rotation axis:
-        <select id="axis-select">
-          <option value="yaw">yaw</option>
-          <option value="pitch">pitch</option>
-          <option value="roll">roll</option>
-        </select>
-      </label>
-    </div>
-    <div id="param-controls"></div>
-    <div id="accuracy-readout">
-      <span>Top-<span id="accuracy-n"></span> accuracy: <span id="accuracy-value"></span></span>
-      <span id="accuracy-notice">ⓘ</span>
-    </div>
   </div>
   <div id="main">
     <div id="left-panel">
