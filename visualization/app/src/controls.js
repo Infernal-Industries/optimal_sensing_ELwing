@@ -68,9 +68,13 @@ export function makeApplyButton(onClick, label = "Apply") {
  *   boxed (default: same as confirm): draws a bordered box around this control's row.
  *   Pass false when several confirm-gated controls share one outer bordered container
  *   (with a single Apply button) elsewhere, so each control doesn't also draw its own.
+ *   isLive?: () => boolean -- checked on every stage while confirm is true; when it
+ *   returns true, commits immediately instead of waiting for the caller's commit().
+ *   Lets a runtime toggle (e.g. a "live" testing checkbox) switch a confirm-gated
+ *   control back to per-drag-frame behavior without recreating it.
  */
 export function createLiveDualControl(container, opts) {
-  const { label, min, max, step, onChange, confirm = false, boxed = confirm } = opts;
+  const { label, min, max, step, onChange, confirm = false, boxed = confirm, isLive = () => false } = opts;
   const format = opts.format || ((v) => v.toFixed(2));
   let value = opts.value;
 
@@ -97,10 +101,11 @@ export function createLiveDualControl(container, opts) {
   inputs.appendChild(numberBox);
   container.appendChild(wrap);
 
-  // stage() updates the displayed value only (cheap: DOM text/attrs). commit()
-  // additionally fires onChange. Non-confirm controls stage+commit together on
-  // every input; confirm controls stage on every input, and only commit when
-  // the caller (main.js's single shared Apply button) calls .commit().
+  // stage() updates the displayed value only (cheap: DOM text/attrs), never fires
+  // onChange itself. commit() additionally fires onChange. Each entry point below
+  // decides whether to commit right after staging: non-confirm controls always do;
+  // confirm controls only do when isLive() (a runtime toggle) says to, otherwise they
+  // wait for the caller's own commit() call (main.js's single shared Apply button).
   function stage(v, source) {
     value = v;
     valueSpan.textContent = format(value);
@@ -110,22 +115,22 @@ export function createLiveDualControl(container, opts) {
   function commit() {
     onChange(value);
   }
-  function apply(v, source) {
-    stage(v, source);
-    commit();
-  }
 
-  slider.addEventListener("input", () => (confirm ? stage(Number(slider.value), "slider") : apply(Number(slider.value), "slider")));
+  slider.addEventListener("input", () => {
+    stage(Number(slider.value), "slider");
+    if (!confirm || isLive()) commit();
+  });
   numberBox.addEventListener("change", () => {
     const v = Number(numberBox.value);
     if (!Number.isFinite(v)) return;
-    if (confirm) stage(v, "number");
-    else apply(v, "number");
+    stage(v, "number");
+    if (!confirm || isLive()) commit();
   });
 
   return {
     setValue(v) {
-      apply(v, null);
+      stage(v, null);
+      commit();
     },
     getValue() {
       return value;
@@ -155,9 +160,11 @@ export function createLiveDualControl(container, opts) {
  *   boxed (default: same as confirm): draws a bordered box around this control's row;
  *   pass false when grouped into one shared bordered container elsewhere (see
  *   createLiveDualControl's matching option).
+ *   isLive?: () => boolean -- see createLiveDualControl's matching option; when true,
+ *   commits immediately on every slider move instead of waiting for commit().
  */
 export function createResolutionLadderControl(container, opts) {
-  const { label, points, floor, onChange, confirm = false, boxed = confirm } = opts;
+  const { label, points, floor, onChange, confirm = false, boxed = confirm, isLive = () => false } = opts;
   const format = opts.format || ((v) => v.toFixed(2));
   const sorted = points.slice().sort((a, b) => a - b);
   let value = opts.value;
@@ -227,8 +234,8 @@ export function createResolutionLadderControl(container, opts) {
 
   slider.addEventListener("input", () => {
     const v = sorted[Number(slider.value)];
-    if (confirm) stageExact(v);
-    else applyExact(v);
+    if (!confirm || isLive()) applyExact(v);
+    else stageExact(v);
   });
   numberBox.addEventListener("change", () => {
     const v = Number(numberBox.value);

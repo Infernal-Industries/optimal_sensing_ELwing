@@ -152,6 +152,12 @@ async function main() {
       "display:flex;flex-wrap:wrap;align-items:flex-end;gap:1rem;border:1px solid #3d5166;border-radius:6px;padding:8px 10px;background:#161a22;";
     paramControls.appendChild(confirmGroup);
 
+    // TEMPORARY testing aid: a "Live" checkbox that bypasses the Apply-button gating --
+    // when checked, β/α/ω/E commit immediately on every slider move (the pre-confirm-
+    // gating behavior), same as before this feature was added, for comparing/debugging
+    // against the gated behavior. Remove once no longer needed for testing.
+    let liveTesting = false;
+
     // Slider snaps in ~10 coarse steps across its range -- matching Wing stiffness
     // factor E's ~10-point ladder feel -- rather than smooth continuous drag. The number
     // box is unrestricted (step="any" in controls.js), so exact/in-between values are
@@ -164,6 +170,7 @@ async function main() {
       value: nldShift,
       confirm: true,
       boxed: false,
+      isLive: () => liveTesting,
       onChange: (v) => {
         nldShift = v;
         pushThreshold();
@@ -178,6 +185,7 @@ async function main() {
       format: (v) => v.toFixed(0),
       confirm: true,
       boxed: false,
+      isLive: () => liveTesting,
       onChange: (v) => {
         nldGrad = v;
         pushThreshold();
@@ -191,6 +199,7 @@ async function main() {
       value: staFreq,
       confirm: true,
       boxed: false,
+      isLive: () => liveTesting,
       onChange: (v) => {
         staFreq = v;
         pushThreshold();
@@ -238,6 +247,7 @@ async function main() {
       floor: STIFFNESS_FLOOR,
       confirm: true,
       boxed: false,
+      isLive: () => liveTesting,
       onChange: (v) => {
         const match = manifest.sets.find((s) => s.stiffnessFactor === v && s.axis === currentSet.axis);
         if (!match) {
@@ -252,14 +262,29 @@ async function main() {
     // commits together -- pressing it fires each control's onChange in turn (each
     // control's own pushThreshold/loadAndMount body is unchanged; only the button that
     // triggers them is now singular instead of one per control).
-    confirmGroup.appendChild(
-      makeApplyButton(() => {
-        betaControl.commit();
-        alphaControl.commit();
-        omegaControl.commit();
-        stiffnessControl.commit();
-      }, "Apply parameter changes")
-    );
+    const applyBtn = makeApplyButton(() => {
+      betaControl.commit();
+      alphaControl.commit();
+      omegaControl.commit();
+      stiffnessControl.commit();
+    }, "Apply parameter changes");
+    confirmGroup.appendChild(applyBtn);
+
+    // TEMPORARY testing checkbox (see liveTesting above): disables the Apply button and
+    // makes β/α/ω/E commit immediately on every slider move instead of waiting for it.
+    const liveTestingLabel = document.createElement("label");
+    liveTestingLabel.style.cssText = `color:${"#c3c2b7"};font:0.7rem system-ui,sans-serif;display:flex;align-items:center;gap:4px;cursor:pointer;`;
+    const liveTestingCheckbox = document.createElement("input");
+    liveTestingCheckbox.type = "checkbox";
+    liveTestingLabel.appendChild(liveTestingCheckbox);
+    liveTestingLabel.appendChild(document.createTextNode("Live (testing)"));
+    liveTestingCheckbox.addEventListener("change", () => {
+      liveTesting = liveTestingCheckbox.checked;
+      applyBtn.disabled = liveTesting;
+      applyBtn.style.opacity = liveTesting ? "0.5" : "1";
+      applyBtn.style.cursor = liveTesting ? "default" : "pointer";
+    });
+    confirmGroup.appendChild(liveTestingLabel);
   } catch (err) {
     statusEl.textContent = `Failed to load: ${err.message}`;
     console.error(err);
