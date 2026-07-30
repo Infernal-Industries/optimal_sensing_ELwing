@@ -210,17 +210,20 @@ function createChart(container, opts) {
     return idx;
   }
 
-  // Shows the crosshair+tooltip at the data point nearest time `t` (ms). Used for
-  // both live hover and the pinned (paused) display -- same visual, different
-  // trigger/lifetime.
-  function showAt(t) {
-    const idx = nearestIndexForTime(t);
-    if (idx < 0) return;
-    const nearestX = seriesData.flap[idx].x;
-    crosshair.setAttribute("x1", xScale(nearestX));
-    crosshair.setAttribute("x2", xScale(nearestX));
+  // The dotted crosshair line and the tooltip (x/y data display) are now
+  // independent: the crosshair always follows the cursor on hover (even while
+  // pinned, so the user can visually compare hover position against the pinned
+  // one), but the tooltip's displayed values only change on click while pinned
+  // -- see the pointermove/click handlers below.
+  function moveCrosshair(x) {
+    crosshair.setAttribute("x1", xScale(x));
+    crosshair.setAttribute("x2", xScale(x));
     crosshair.setAttribute("opacity", 1);
-
+  }
+  function hideCrosshair() {
+    crosshair.setAttribute("opacity", 0);
+  }
+  function showTooltipAt(nearestX, idx) {
     const rows = ["flap", "rotate"]
       .map((key) => {
         const p = seriesData[key][idx];
@@ -234,6 +237,20 @@ function createChart(container, opts) {
     tooltip.style.left = `${xScale(nearestX) + 8}px`;
     tooltip.style.top = "4px";
   }
+  function hideTooltip() {
+    tooltip.style.display = "none";
+  }
+
+  // Moves the crosshair AND the tooltip together to the data point nearest time
+  // `t` (ms) -- used for programmatic sync (click-to-pin, setPinned, and
+  // re-displaying the pin after data changes), where both should jump together.
+  function showAt(t) {
+    const idx = nearestIndexForTime(t);
+    if (idx < 0) return;
+    const nearestX = seriesData.flap[idx].x;
+    moveCrosshair(nearestX);
+    showTooltipAt(nearestX, idx);
+  }
 
   function timeFromEvent(ev) {
     const rect = svg.getBoundingClientRect();
@@ -242,13 +259,18 @@ function createChart(container, opts) {
   }
 
   hitRect.addEventListener("pointermove", (ev) => {
-    if (pinnedX !== null) return; // pinned: hover no longer changes the display
-    showAt(timeFromEvent(ev));
+    const idx = nearestIndexForTime(timeFromEvent(ev));
+    if (idx < 0) return;
+    // Dotted crosshair always tracks the cursor, pinned or not -- lets the user
+    // visually compare the hover position against the pinned one.
+    moveCrosshair(seriesData.flap[idx].x);
+    // But the tooltip's displayed values only change via a click while pinned
+    // ("stay at the selected time... until... a different time is selected").
+    if (pinnedX === null) showTooltipAt(seriesData.flap[idx].x, idx);
   });
   hitRect.addEventListener("pointerleave", () => {
-    if (pinnedX !== null) return; // pinned: stays visible after the pointer leaves
-    crosshair.setAttribute("opacity", 0);
-    tooltip.style.display = "none";
+    hideCrosshair(); // the dotted hover indicator always hides when the pointer leaves
+    if (pinnedX === null) hideTooltip(); // the pinned tooltip stays up regardless
   });
   hitRect.addEventListener("click", (ev) => {
     const idx = nearestIndexForTime(timeFromEvent(ev));
@@ -285,8 +307,8 @@ function createChart(container, opts) {
     },
     clearPinned() {
       pinnedX = null;
-      crosshair.setAttribute("opacity", 0);
-      tooltip.style.display = "none";
+      hideCrosshair();
+      hideTooltip();
     },
     dispose() {
       resizeObserver.disconnect();
