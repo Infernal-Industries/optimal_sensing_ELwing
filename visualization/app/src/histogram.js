@@ -16,10 +16,12 @@
 // refractory period, exactly matching convertProbFiringToSpikes.m's
 // method (verified numerically before use, see encoding.js).
 //
-// Bar chart per the dataviz skill: bars <=24px, 4px rounded data-end /
-// square baseline, hairline recessive gridlines, legend always shown for
-// 2 series, categorical colors reused from timelines.js's fixed
-// flap/rotate assignment (identity must stay consistent across the app).
+// Bar chart per the dataviz skill: 4px rounded data-end / square baseline,
+// hairline recessive gridlines, legend always shown for 2 series,
+// categorical colors reused from timelines.js's fixed flap/rotate
+// assignment (identity must stay consistent across the app). Bar width is
+// NOT capped -- it's derived from pxPerBin (see layoutSegments), which can
+// legitimately be large when a burst only has a few active bins.
 
 import { computePFire, samplePSTH } from "./encoding.js";
 
@@ -217,7 +219,11 @@ export function createHistogram(container, manifest, payload) {
     const plotW = W - PAD.left - PAD.right;
     const plotH = H - PAD.top - PAD.bottom;
     const pxPerBin = layoutSegments(segments, plotW);
-    const barW = Math.max(1, Math.min(24, pxPerBin * 0.85));
+    // No upper cap: when a burst has few active bins, pxPerBin (the width
+    // reallocated to it after gap-collapsing) can get large -- capping barW
+    // left a thin bar stranded in a huge slot, i.e. exactly the large empty
+    // gaps between bars this whole segment-layout scheme exists to remove.
+    const barW = Math.max(1, pxPerBin * 0.85);
 
     for (let i = 0; i <= 2; i++) {
       const val = Math.round((maxCount * i) / 2);
