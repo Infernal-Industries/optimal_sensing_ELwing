@@ -210,6 +210,12 @@ export function createHistogram(container, manifest, payload) {
     item.appendChild(text);
     legend.appendChild(item);
   }
+  {
+    const item = document.createElement("span");
+    item.style.cssText = `display:inline-flex;align-items:center;gap:4px;color:${INK_MUTED};`;
+    item.textContent = "— mean, ┄ median";
+    legend.appendChild(item);
+  }
   root.appendChild(legend);
 
   container.appendChild(root);
@@ -247,19 +253,28 @@ export function createHistogram(container, manifest, payload) {
       `Sensor #${sensorIdx + 1}, ${N_REPS} simulated wingbeats per condition (client-side, refractory period ` +
       `${manifest.encoding.refPer}ms), spike trains sampled from the real P(fire) curve above.`;
 
-    const fmt = (v) => (v === null ? "no spikes" : `${v.toFixed(1)}ms`);
+    // Computed once here (not in render(), which also runs on every resize) and
+    // stashed directly on each data segment -- render() draws mean/median marker
+    // lines from these, and the stats text below reads the same numbers, so
+    // there's only one weightedStats() call per condition per segment.
     const dataSegs = segments.filter((s) => s.type === "data");
+    for (const seg of dataSegs) {
+      seg.stats = {
+        flap: weightedStats(counts.flap, seg.start, seg.end, dt),
+        rotate: weightedStats(counts.rotate, seg.start, seg.end, dt),
+      };
+    }
+
+    const fmt = (v) => (v === null ? "no spikes" : `${v.toFixed(1)}ms`);
     statsEl.innerHTML = dataSegs
       .map((seg, i) => {
-        const flapStats = weightedStats(counts.flap, seg.start, seg.end, dt);
-        const rotateStats = weightedStats(counts.rotate, seg.start, seg.end, dt);
         const range = `${Math.round(seg.start * dt)}–${Math.round((seg.end - 1) * dt)}ms`;
         const label = dataSegs.length > 1 ? `Region ${i + 1} (${range})` : `${range}`;
         return (
           `${label}: ` +
-          `<span style="color:${COLORS.flap.bar}">flap</span> mean ${fmt(flapStats.mean)}, median ${fmt(flapStats.median)}` +
+          `<span style="color:${COLORS.flap.bar}">flap</span> mean ${fmt(seg.stats.flap.mean)}, median ${fmt(seg.stats.flap.median)}` +
           ` · ` +
-          `<span style="color:${COLORS.rotate.bar}">rotate</span> mean ${fmt(rotateStats.mean)}, median ${fmt(rotateStats.median)}`
+          `<span style="color:${COLORS.rotate.bar}">rotate</span> mean ${fmt(seg.stats.rotate.mean)}, median ${fmt(seg.stats.rotate.median)}`
         );
       })
       .join("<br>");
@@ -364,6 +379,45 @@ export function createHistogram(container, manifest, payload) {
               rx: 1.5,
               fill: COLORS[cond].bar,
               "fill-opacity": 0.6,
+            })
+          );
+        }
+      }
+    }
+
+    // Mean (solid) / median (dashed) marker lines per condition, per unbroken
+    // region -- drawn on top of the bars, thin and semi-transparent so the
+    // bars underneath stay legible. Stats were computed once in recompute()
+    // (see seg.stats), not re-derived here.
+    for (const seg of segments) {
+      if (seg.type !== "data" || !seg.stats) continue;
+      for (const cond of ["flap", "rotate"]) {
+        const { mean, median } = seg.stats[cond];
+        const timeToX = (t) => seg.x0 + (t / dt - seg.start) * pxPerBin;
+        if (mean !== null) {
+          svg.appendChild(
+            svgEl("line", {
+              x1: timeToX(mean),
+              x2: timeToX(mean),
+              y1: PAD.top,
+              y2: PAD.top + plotH,
+              stroke: COLORS[cond].bar,
+              "stroke-width": 1.5,
+              opacity: 0.85,
+            })
+          );
+        }
+        if (median !== null) {
+          svg.appendChild(
+            svgEl("line", {
+              x1: timeToX(median),
+              x2: timeToX(median),
+              y1: PAD.top,
+              y2: PAD.top + plotH,
+              stroke: COLORS[cond].bar,
+              "stroke-width": 1.5,
+              "stroke-dasharray": "3,2",
+              opacity: 0.85,
             })
           );
         }

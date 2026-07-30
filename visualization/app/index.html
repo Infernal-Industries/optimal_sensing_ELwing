@@ -25,8 +25,12 @@
   #controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
   #controls label { display: flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
   #param-controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
-  #accuracy-readout { display: flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
-  #accuracy-value { color: #ffffff; font-weight: 600; }
+  #accuracy-readout {
+    display: flex; align-items: center; gap: 0.35rem; white-space: nowrap;
+    margin-left: auto; padding: 3px 10px; border: 1px solid #3d5166; border-radius: 999px;
+    background: #1a2a3d;
+  }
+  #accuracy-value { color: #7fd0ff; font-weight: 700; font-size: 1rem; }
   #accuracy-notice {
     display: none; color: #898781; cursor: help; font-size: 0.85rem;
   }
