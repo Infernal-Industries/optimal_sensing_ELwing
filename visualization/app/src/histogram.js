@@ -35,10 +35,97 @@ const H = 160;
 const PAD = { top: 10, right: 10, bottom: 26, left: 34 };
 const N_REPS = 300; // simulated wingbeats per PSTH draw -- paper uses "hundreds"
 
+// Empty (both-conditions-zero) bins get compressed into a fixed-width "⋯"
+// axis-break marker instead of wasting chart width -- real spike activity
+// clusters into a couple of narrow bursts, so most of the native-resolution
+// bin axis would otherwise just be dead space. Only runs at least GAP_MIN_MS
+// wide collapse (with an absolute floor in bins) -- a single stray zero bin
+// from sampling noise inside a burst shouldn't fragment it into two peaks
+// with a tiny meaningless ellipsis between them.
+const GAP_MIN_MS = 1.5;
+const GAP_MIN_BINS_FLOOR = 3;
+const GAP_PX = 32; // fixed screen width for each collapsed-gap marker
+
 function svgEl(tag, attrs) {
   const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
   for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
   return el;
+}
+
+/**
+ * Finds runs of consecutive bins where both conditions are zero, and keeps
+ * only the ones wide enough to be worth collapsing (see GAP_MIN_MS above).
+ * @returns {{start:number, end:number}[]} end exclusive
+ */
+function findCollapsibleGaps(counts, nBins, dt) {
+  const gapMinBins = Math.max(GAP_MIN_BINS_FLOOR, Math.round(GAP_MIN_MS / dt));
+  const gaps = [];
+  let i = 0;
+  while (i < nBins) {
+    if (counts.flap[i] > 0 || counts.rotate[i] > 0) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < nBins && counts.flap[j] <= 0 && counts.rotate[j] <= 0) j++;
+    if (j - i >= gapMinBins) gaps.push({ start: i, end: j });
+    i = j;
+  }
+  return gaps;
+}
+
+/**
+ * Builds the ordered list of alternating data/gap segments covering
+ * [0, nBins), from the collapsible gaps found above.
+ *   'data' segments: {type, start, end} -- bins to actually draw bars for.
+ *   'gap' segments: {type, start, end, isLeading, isTrailing} -- isLeading
+ *   means "no earlier data, so label the left side as 0 rather than a real
+ *   bin time"; isTrailing means "no later data, so omit the right label
+ *   entirely" (per the user's labeling rule).
+ */
+function buildSegments(counts, nBins, dt) {
+  const gaps = findCollapsibleGaps(counts, nBins, dt);
+  const segments = [];
+  let cursor = 0;
+  for (const g of gaps) {
+    if (g.start > cursor) segments.push({ type: "data", start: cursor, end: g.start });
+    segments.push({
+      type: "gap",
+      start: g.start,
+      end: g.end,
+      isLeading: g.start === 0,
+      isTrailing: g.end === nBins,
+    });
+    cursor = g.end;
+  }
+  if (cursor < nBins) segments.push({ type: "data", start: cursor, end: nBins });
+  return segments;
+}
+
+/**
+ * Assigns each segment its [x0,x1) pixel band: gaps get a fixed GAP_PX;
+ * the remaining width is divided among data segments at one constant
+ * px-per-bin (so relative burst widths stay comparable to each other, and
+ * -- since dead space no longer eats most of the width -- bursts occupy far
+ * more of the chart than a uniform full-axis scale would give them).
+ * Mutates `segments` in place with x0/x1; safe to call every render() since
+ * it only depends on plotW (which may change on resize) and is idempotent.
+ * @returns {number} pxPerBin
+ */
+function layoutSegments(segments, plotW) {
+  const dataSegs = segments.filter((s) => s.type === "data");
+  const nGaps = segments.length - dataSegs.length;
+  const activeBinsTotal = dataSegs.reduce((sum, s) => sum + (s.end - s.start), 0);
+  const availableForData = Math.max(1, plotW - nGaps * GAP_PX);
+  const pxPerBin = activeBinsTotal > 0 ? availableForData / activeBinsTotal : 0;
+
+  let x = PAD.left;
+  for (const seg of segments) {
+    seg.x0 = x;
+    seg.x1 = seg.type === "data" ? x + (seg.end - seg.start) * pxPerBin : x + GAP_PX;
+    x = seg.x1;
+  }
+  return pxPerBin;
 }
 
 /**
@@ -90,12 +177,15 @@ export function createHistogram(container, manifest, payload) {
   let staFreq = manifest.encoding.staFreq;
 
   // recompute() does the stochastic sampling (samplePSTH draws fresh random
-  // spike trains every call) and caches the result in `counts`. render()
-  // only ever draws from that cache -- kept separate so a resize (which
-  // should just redraw at a new width) never re-randomizes the bars, which
-  // would otherwise visibly shimmer while dragging a window edge.
+  // spike trains every call) and caches the result in `counts`, plus the
+  // resulting gap/segment layout (which only depends on `counts`, not on
+  // plotW). render() only ever draws from that cache -- kept separate so a
+  // resize (which should just redraw at a new width) never re-randomizes
+  // the bars, which would otherwise visibly shimmer while dragging a window
+  // edge, and never re-detects gaps either.
   let counts = null;
   let maxCount = 1;
+  let segments = null;
 
   function recompute() {
     const refPerSamples = Math.round((manifest.encoding.refPer * manifest.encoding.sampFreq) / 1000);
@@ -107,6 +197,9 @@ export function createHistogram(container, manifest, payload) {
       counts[cond] = samplePSTH(pfire, refPerSamples, N_REPS);
       maxCount = Math.max(maxCount, ...counts[cond]);
     }
+    const nBins = counts.flap.length;
+    const dt = payload.period_ms / nBins;
+    segments = buildSegments(counts, nBins, dt);
     note.textContent =
       `Sensor #${sensorIdx + 1}, ${N_REPS} simulated wingbeats per condition (client-side, refractory period ` +
       `${manifest.encoding.refPer}ms), spike trains sampled from the real P(fire) curve above.`;
@@ -119,10 +212,12 @@ export function createHistogram(container, manifest, payload) {
     if (!counts) return;
 
     const nBins = counts.flap.length;
+    const dt = payload.period_ms / nBins;
+    const binMs = (bin) => bin * dt;
     const plotW = W - PAD.left - PAD.right;
     const plotH = H - PAD.top - PAD.bottom;
-    const binW = plotW / nBins;
-    const barW = Math.max(1, Math.min(24, binW * 0.85));
+    const pxPerBin = layoutSegments(segments, plotW);
+    const barW = Math.max(1, Math.min(24, pxPerBin * 0.85));
 
     for (let i = 0; i <= 2; i++) {
       const val = Math.round((maxCount * i) / 2);
@@ -140,39 +235,73 @@ export function createHistogram(container, manifest, payload) {
       label.textContent = String(val);
       svg.appendChild(label);
     }
-    for (const tx of [0, payload.period_ms / 2, payload.period_ms]) {
-      const x = PAD.left + (tx / payload.period_ms) * plotW;
+
+    function xAxisLabel(x, anchor, text) {
       const label = svgEl("text", {
         x,
         y: H - PAD.bottom + 16,
-        "text-anchor": tx === 0 ? "start" : tx === payload.period_ms ? "end" : "middle",
+        "text-anchor": anchor,
         fill: INK_MUTED,
         style: "font:0.65rem system-ui,sans-serif",
       });
-      label.textContent = `${Math.round(tx)}ms`;
+      label.textContent = text;
       svg.appendChild(label);
     }
 
+    const firstSeg = segments[0];
+    const lastSeg = segments[segments.length - 1];
+    // Edge labels only appear where a gap isn't already providing that
+    // boundary's label (a leading/trailing gap's own label below covers it).
+    if (firstSeg.type === "data") xAxisLabel(PAD.left, "start", "0ms");
+    if (lastSeg.type === "data") xAxisLabel(W - PAD.right, "end", `${Math.round(payload.period_ms)}ms`);
+
+    for (const seg of segments) {
+      if (seg.type !== "gap") continue;
+      const cx = (seg.x0 + seg.x1) / 2;
+      const ellipsis = svgEl("text", {
+        x: cx,
+        y: H - PAD.bottom + 16,
+        "text-anchor": "middle",
+        fill: INK_MUTED,
+        style: "font:0.7rem system-ui,sans-serif",
+      });
+      ellipsis.textContent = "⋯";
+      svg.appendChild(ellipsis);
+
+      // Leading gap: no real data before it, so label "0" per the rule
+      // (rather than omitting it, since there's no natural bin to report).
+      xAxisLabel(seg.x0 - 4, "end", seg.isLeading ? "0ms" : `${Math.round(binMs(seg.start - 1))}ms`);
+      // Trailing gap: nothing follows, so no right label at all.
+      if (!seg.isTrailing) {
+        xAxisLabel(seg.x1 + 4, "start", `${Math.round(binMs(seg.end))}ms`);
+      }
+    }
+
     // Fully overlapping bars (same x for both series), each semi-transparent
-    // so both true heights stay visible through the other.
-    for (let bin = 0; bin < nBins; bin++) {
-      for (const cond of ["flap", "rotate"]) {
-        const count = counts[cond][bin];
-        if (count <= 0) continue;
-        const barH = (count / maxCount) * plotH;
-        const x = PAD.left + bin * binW + (binW - barW) / 2;
-        const y = PAD.top + plotH - barH;
-        svg.appendChild(
-          svgEl("rect", {
-            x,
-            y,
-            width: barW,
-            height: barH,
-            rx: 1.5,
-            fill: COLORS[cond].bar,
-            "fill-opacity": 0.6,
-          })
-        );
+    // so both true heights stay visible through the other. Only bins inside
+    // 'data' segments are drawn -- collapsed-gap bins have nothing to show.
+    for (const seg of segments) {
+      if (seg.type !== "data") continue;
+      for (let bin = seg.start; bin < seg.end; bin++) {
+        const binX0 = seg.x0 + (bin - seg.start) * pxPerBin;
+        for (const cond of ["flap", "rotate"]) {
+          const count = counts[cond][bin];
+          if (count <= 0) continue;
+          const barH = (count / maxCount) * plotH;
+          const x = binX0 + (pxPerBin - barW) / 2;
+          const y = PAD.top + plotH - barH;
+          svg.appendChild(
+            svgEl("rect", {
+              x,
+              y,
+              width: barW,
+              height: barH,
+              rx: 1.5,
+              fill: COLORS[cond].bar,
+              "fill-opacity": 0.6,
+            })
+          );
+        }
       }
     }
   }
