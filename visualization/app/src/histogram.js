@@ -110,6 +110,38 @@ function buildSegments(counts, nBins, dt) {
 }
 
 /**
+ * Weighted mean/median spike time (ms) for one condition, over one contiguous
+ * bin range [start,end) -- i.e. one unbroken ("no ellipsis") data segment.
+ * Weighted by spike count per bin, since a bin's "value" for this purpose is
+ * its time, repeated `count` times. Bins are already in time order, so the
+ * median is just the bin where cumulative count first reaches half the total
+ * (no need to sort).
+ * @returns {{mean: number|null, median: number|null}} null when the segment
+ *   has zero spikes for this condition (nothing to average).
+ */
+function weightedStats(countsForCond, start, end, dt) {
+  let total = 0;
+  let sumTime = 0;
+  for (let b = start; b < end; b++) {
+    const c = countsForCond[b];
+    total += c;
+    sumTime += c * (b * dt);
+  }
+  if (total <= 0) return { mean: null, median: null };
+  const half = total / 2;
+  let cum = 0;
+  let median = null;
+  for (let b = start; b < end; b++) {
+    cum += countsForCond[b];
+    if (cum >= half) {
+      median = b * dt;
+      break;
+    }
+  }
+  return { mean: sumTime / total, median };
+}
+
+/**
  * Assigns each segment its [x0,x1) pixel band: gaps get a fixed GAP_PX;
  * the remaining width is divided among data segments at one constant
  * px-per-bin (so relative burst widths stay comparable to each other, and
@@ -149,8 +181,17 @@ export function createHistogram(container, manifest, payload) {
 
   const note = document.createElement("div");
   note.id = "histogram-note";
-  note.style.cssText = `color:${INK_MUTED};font:0.68rem system-ui,sans-serif;margin-bottom:6px;max-width:100%;`;
+  note.style.cssText = `color:${INK_MUTED};font:0.68rem system-ui,sans-serif;margin-bottom:2px;max-width:100%;`;
   root.appendChild(note);
+
+  // Per-unbroken-region (i.e. per 'data' segment -- excludes the collapsed
+  // "⋯" gaps) mean/median spike time, per condition. Text rather than
+  // on-chart markers: with up to a few bursts x 2 conditions x 2 stats, tick
+  // marks would clutter the bars more than they'd clarify.
+  const statsEl = document.createElement("div");
+  statsEl.id = "histogram-stats";
+  statsEl.style.cssText = `color:${INK_SECONDARY};font:0.68rem system-ui,sans-serif;margin-bottom:6px;max-width:100%;`;
+  root.appendChild(statsEl);
 
   // W tracks the container's actual width (updated by the ResizeObserver
   // below) so the chart fills whatever space the bottom row has, rather than
@@ -221,6 +262,24 @@ export function createHistogram(container, manifest, payload) {
     note.textContent =
       `Sensor #${sensorIdx + 1}, ${N_REPS} simulated wingbeats per condition (client-side, refractory period ` +
       `${manifest.encoding.refPer}ms), spike trains sampled from the real P(fire) curve above.`;
+
+    const fmt = (v) => (v === null ? "no spikes" : `${v.toFixed(1)}ms`);
+    const dataSegs = segments.filter((s) => s.type === "data");
+    statsEl.innerHTML = dataSegs
+      .map((seg, i) => {
+        const flapStats = weightedStats(counts.flap, seg.start, seg.end, dt);
+        const rotateStats = weightedStats(counts.rotate, seg.start, seg.end, dt);
+        const range = `${Math.round(seg.start * dt)}–${Math.round((seg.end - 1) * dt)}ms`;
+        const label = dataSegs.length > 1 ? `Region ${i + 1} (${range})` : `${range}`;
+        return (
+          `${label}: ` +
+          `<span style="color:${COLORS.flap.bar}">flap</span> mean ${fmt(flapStats.mean)}, median ${fmt(flapStats.median)}` +
+          ` · ` +
+          `<span style="color:${COLORS.rotate.bar}">rotate</span> mean ${fmt(rotateStats.mean)}, median ${fmt(rotateStats.median)}`
+        );
+      })
+      .join("<br>");
+
     render();
   }
 
