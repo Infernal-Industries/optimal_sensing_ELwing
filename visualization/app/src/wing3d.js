@@ -417,14 +417,18 @@ export function createWingScene(container, manifest, payload, opts = {}) {
     if (!running) return;
     const dt = t - lastT;
     lastT = t;
-    acc += dt;
-    const msPerFrame = (payload.period_ms / payload.frames) * (BASE_SLOW_MOTION_FACTOR / speedMultiplier);
     // Paused: skip advancing frameIdx, but still fall through to the render/
     // onFrame calls below unconditionally (same reasoning as `visible` above
     // -- other views must keep seeing a consistent, up-to-date snapshot even
     // while this clock isn't ticking, e.g. a pause-triggered seekTo() should
-    // show up on the very next tick, not wait for an unpause).
+    // show up on the very next tick, not wait for an unpause). Critically,
+    // `acc` must NOT accumulate `dt` while paused either -- it previously did,
+    // so every tick spent paused silently built up unspent time in `acc`, all
+    // of which then drained in one burst (a visible frame jump) the instant
+    // playback resumed, as if time had kept flowing invisibly while paused.
     if (!paused) {
+      acc += dt;
+      const msPerFrame = (payload.period_ms / payload.frames) * (BASE_SLOW_MOTION_FACTOR / speedMultiplier);
       while (acc >= msPerFrame) {
         acc -= msPerFrame;
         frameIdx = (frameIdx + 1) % payload.frames;
