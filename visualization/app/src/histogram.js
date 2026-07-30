@@ -105,14 +105,12 @@ function buildSegments(counts, nBins, dt) {
 }
 
 /**
- * Weighted mean/median spike time (ms) for one condition, over one contiguous
- * bin range [start,end) -- i.e. one unbroken ("no ellipsis") data segment.
+ * Weighted mean spike time (ms) for one condition, over one contiguous bin
+ * range [start,end) -- i.e. one unbroken ("no ellipsis") data segment.
  * Weighted by spike count per bin, since a bin's "value" for this purpose is
- * its time, repeated `count` times. Bins are already in time order, so the
- * median is just the bin where cumulative count first reaches half the total
- * (no need to sort).
- * @returns {{mean: number|null, median: number|null}} null when the segment
- *   has zero spikes for this condition (nothing to average).
+ * its time, repeated `count` times.
+ * @returns {{mean: number|null}} null when the segment has zero spikes for
+ *   this condition (nothing to average).
  */
 function weightedStats(countsForCond, start, end, dt) {
   let total = 0;
@@ -122,18 +120,8 @@ function weightedStats(countsForCond, start, end, dt) {
     total += c;
     sumTime += c * (b * dt);
   }
-  if (total <= 0) return { mean: null, median: null };
-  const half = total / 2;
-  let cum = 0;
-  let median = null;
-  for (let b = start; b < end; b++) {
-    cum += countsForCond[b];
-    if (cum >= half) {
-      median = b * dt;
-      break;
-    }
-  }
-  return { mean: sumTime / total, median };
+  if (total <= 0) return { mean: null };
+  return { mean: sumTime / total };
 }
 
 /**
@@ -180,9 +168,7 @@ export function createHistogram(container, manifest, payload) {
   root.appendChild(note);
 
   // Per-unbroken-region (i.e. per 'data' segment -- excludes the collapsed
-  // "⋯" gaps) mean/median spike time, per condition. Text rather than
-  // on-chart markers: with up to a few bursts x 2 conditions x 2 stats, tick
-  // marks would clutter the bars more than they'd clarify.
+  // "⋯" gaps) mean spike time, per condition.
   const statsEl = document.createElement("div");
   statsEl.id = "histogram-stats";
   statsEl.style.cssText = `color:${INK_SECONDARY};font:0.68rem system-ui,sans-serif;margin-bottom:6px;max-width:100%;`;
@@ -213,7 +199,7 @@ export function createHistogram(container, manifest, payload) {
   {
     const item = document.createElement("span");
     item.style.cssText = `display:inline-flex;align-items:center;gap:4px;color:${INK_MUTED};`;
-    item.textContent = "— mean, ┄ median";
+    item.textContent = "— mean";
     legend.appendChild(item);
   }
   root.appendChild(legend);
@@ -272,9 +258,9 @@ export function createHistogram(container, manifest, payload) {
         const label = dataSegs.length > 1 ? `Region ${i + 1} (${range})` : `${range}`;
         return (
           `${label}: ` +
-          `<span style="color:${COLORS.flap.bar}">flap</span> mean ${fmt(seg.stats.flap.mean)}, median ${fmt(seg.stats.flap.median)}` +
+          `<span style="color:${COLORS.flap.bar}">flap</span> mean ${fmt(seg.stats.flap.mean)}` +
           ` · ` +
-          `<span style="color:${COLORS.rotate.bar}">rotate</span> mean ${fmt(seg.stats.rotate.mean)}, median ${fmt(seg.stats.rotate.median)}`
+          `<span style="color:${COLORS.rotate.bar}">rotate</span> mean ${fmt(seg.stats.rotate.mean)}`
         );
       })
       .join("<br>");
@@ -385,42 +371,27 @@ export function createHistogram(container, manifest, payload) {
       }
     }
 
-    // Mean (solid) / median (dashed) marker lines per condition, per unbroken
-    // region -- drawn on top of the bars, thin and semi-transparent so the
-    // bars underneath stay legible. Stats were computed once in recompute()
-    // (see seg.stats), not re-derived here.
+    // Mean marker line per condition, per unbroken region -- drawn on top of
+    // the bars, thin and semi-transparent so the bars underneath stay
+    // legible. Stats were computed once in recompute() (see seg.stats), not
+    // re-derived here.
     for (const seg of segments) {
       if (seg.type !== "data" || !seg.stats) continue;
       for (const cond of ["flap", "rotate"]) {
-        const { mean, median } = seg.stats[cond];
-        const timeToX = (t) => seg.x0 + (t / dt - seg.start) * pxPerBin;
-        if (mean !== null) {
-          svg.appendChild(
-            svgEl("line", {
-              x1: timeToX(mean),
-              x2: timeToX(mean),
-              y1: PAD.top,
-              y2: PAD.top + plotH,
-              stroke: COLORS[cond].bar,
-              "stroke-width": 1.5,
-              opacity: 0.85,
-            })
-          );
-        }
-        if (median !== null) {
-          svg.appendChild(
-            svgEl("line", {
-              x1: timeToX(median),
-              x2: timeToX(median),
-              y1: PAD.top,
-              y2: PAD.top + plotH,
-              stroke: COLORS[cond].bar,
-              "stroke-width": 1.5,
-              "stroke-dasharray": "3,2",
-              opacity: 0.85,
-            })
-          );
-        }
+        const { mean } = seg.stats[cond];
+        if (mean === null) continue;
+        const x = seg.x0 + (mean / dt - seg.start) * pxPerBin;
+        svg.appendChild(
+          svgEl("line", {
+            x1: x,
+            x2: x,
+            y1: PAD.top,
+            y2: PAD.top + plotH,
+            stroke: COLORS[cond].bar,
+            "stroke-width": 1.5,
+            opacity: 0.85,
+          })
+        );
       }
     }
   }
