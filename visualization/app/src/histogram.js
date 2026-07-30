@@ -29,6 +29,11 @@ const COLORS = {
   flap: { bar: "#3987e5", label: "flapping only" },
   rotate: { bar: "#d95926", label: "flapping + rotation" },
 };
+// Neutral gray for the region where both bars' counts overlap (drawn as the
+// shared base of the stack, see the bar-drawing loop below) -- distinguishes
+// "both conditions fired here" from either condition's own color, rather than
+// just looking like whichever series happened to draw on top.
+const OVERLAP_COLOR = "#9a9ba0";
 const INK_SECONDARY = "#c3c2b7";
 const INK_MUTED = "#898781";
 const GRIDLINE = "#2c2c2a";
@@ -169,6 +174,17 @@ export function createHistogram(container, manifest, payload) {
     item.appendChild(text);
     legend.appendChild(item);
   }
+  {
+    const item = document.createElement("span");
+    item.style.cssText = "display:inline-flex;align-items:center;gap:4px;";
+    const swatch = document.createElement("span");
+    swatch.style.cssText = `display:inline-block;width:10px;height:10px;background:${OVERLAP_COLOR};border-radius:2px;`;
+    item.appendChild(swatch);
+    const text = document.createElement("span");
+    text.textContent = "overlap";
+    item.appendChild(text);
+    legend.appendChild(item);
+  }
   root.appendChild(legend);
 
   container.appendChild(root);
@@ -283,28 +299,46 @@ export function createHistogram(container, manifest, payload) {
       }
     }
 
-    // Fully overlapping bars (same x for both series), each semi-transparent
-    // so both true heights stay visible through the other. Only bins inside
-    // 'data' segments are drawn -- collapsed-gap bins have nothing to show.
+    // Both series share the same x per bin. Rather than two semi-transparent
+    // rects (which just made the overlap look like whichever color happened
+    // to be drawn on top, usually rotate's orange), draw the shared "both
+    // fired here" base in one neutral color, and only whichever condition's
+    // count is larger gets its own color, capping the extra amount on top.
+    // Only bins inside 'data' segments are drawn -- collapsed-gap bins have
+    // nothing to show.
     for (const seg of segments) {
       if (seg.type !== "data") continue;
       for (let bin = seg.start; bin < seg.end; bin++) {
         const binX0 = seg.x0 + (bin - seg.start) * pxPerBin;
-        for (const cond of ["flap", "rotate"]) {
-          const count = counts[cond][bin];
-          if (count <= 0) continue;
-          const barH = (count / maxCount) * plotH;
-          const x = binX0 + (pxPerBin - barW) / 2;
-          const y = PAD.top + plotH - barH;
+        const hFlap = (counts.flap[bin] / maxCount) * plotH;
+        const hRotate = (counts.rotate[bin] / maxCount) * plotH;
+        const overlapH = Math.min(hFlap, hRotate);
+        const maxH = Math.max(hFlap, hRotate);
+        if (maxH <= 0) continue;
+        const x = binX0 + (pxPerBin - barW) / 2;
+
+        if (overlapH > 0) {
           svg.appendChild(
             svgEl("rect", {
               x,
-              y,
+              y: PAD.top + plotH - overlapH,
               width: barW,
-              height: barH,
+              height: overlapH,
               rx: 1.5,
-              fill: COLORS[cond].bar,
-              "fill-opacity": 0.6,
+              fill: OVERLAP_COLOR,
+            })
+          );
+        }
+        if (maxH > overlapH) {
+          const excessCond = hFlap > hRotate ? "flap" : "rotate";
+          svg.appendChild(
+            svgEl("rect", {
+              x,
+              y: PAD.top + plotH - maxH,
+              width: barW,
+              height: maxH - overlapH,
+              rx: 1.5,
+              fill: COLORS[excessCond].bar,
             })
           );
         }
