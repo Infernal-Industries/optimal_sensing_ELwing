@@ -102,7 +102,10 @@ async function main() {
         accuracyNotice.style.display = "none";
         accuracyNotice.title = "";
       } else {
-        accuracyNotice.style.display = "inline";
+        // inline-block, not inline -- the notice is a fixed-size CSS-drawn
+        // circle (see index.html), and plain `inline` display ignores
+        // width/height (centering comes from CSS's text-align + line-height).
+        accuracyNotice.style.display = "inline-block";
         accuracyNotice.title = `Approximate: the optimal-sensor overlay & this accuracy figure were computed by SSPOC (MATLAB) at β=${manifest.encoding.nldShift}, α=${manifest.encoding.nldGrad}, ω=${manifest.encoding.staFreq} — they don't update with these live β/α/ω controls (that would need re-running SSPOC, a Tier 2 job).`;
       }
     }

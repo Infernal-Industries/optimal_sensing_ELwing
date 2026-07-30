@@ -14,10 +14,13 @@ const INK_SECONDARY = "#c3c2b7";
 const INK_MUTED = "#898781";
 
 // Single-line control row for the compact top bar: label, then slider+numberbox
-// (appended into `inputs`), then a small "ⓘ" notice indicator that only takes
-// space when it actually has something to say (its message goes in the native
-// `title` tooltip, not inline text -- a full sentence per control would blow
-// the top bar's vertical budget across 4+ controls).
+// (appended into `inputs`), then a small "i" notice indicator (a plain letter
+// in a CSS-drawn circle, not the "ⓘ" Unicode glyph -- that character isn't
+// covered by every system font and was rendering as a tofu/question-mark box
+// on some systems) that only takes space when it actually has something to
+// say (its message goes in the native `title` tooltip, not inline text -- a
+// full sentence per control would blow the top bar's vertical budget across
+// 4+ controls).
 function row(labelText) {
   const wrap = document.createElement("div");
   wrap.style.cssText = `display:flex;align-items:center;gap:6px;font:0.72rem system-ui,sans-serif;color:${INK_SECONDARY};white-space:nowrap;`;
@@ -28,16 +31,20 @@ function row(labelText) {
   inputs.style.cssText = "display:flex;align-items:center;gap:4px;";
   wrap.appendChild(inputs);
   const notice = document.createElement("span");
-  notice.textContent = "ⓘ";
-  notice.style.cssText = `display:none;color:${INK_MUTED};cursor:help;font-size:0.85rem;`;
+  notice.textContent = "i";
+  notice.style.cssText =
+    `display:none;width:13px;height:13px;line-height:12px;text-align:center;border-radius:50%;` +
+    `border:1px solid ${INK_MUTED};color:${INK_MUTED};cursor:help;font:italic 9px/12px Georgia,serif;flex:none;`;
   wrap.appendChild(notice);
   return { wrap, label, inputs, notice };
 }
 
-// Shows/hides the row's "ⓘ" indicator and sets its tooltip text.
+// Shows/hides the row's "i" indicator and sets its tooltip text.
 function setNotice(notice, message) {
   notice.title = message || "";
-  notice.style.display = message ? "inline" : "none";
+  // inline-block, not inline -- the notice is a fixed-size CSS-drawn circle,
+  // and plain `inline` display ignores width/height.
+  notice.style.display = message ? "inline-block" : "none";
 }
 
 /**

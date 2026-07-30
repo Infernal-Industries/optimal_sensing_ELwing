@@ -31,8 +31,13 @@
     background: #1a2a3d;
   }
   #accuracy-value { color: #7fd0ff; font-weight: 700; font-size: 1rem; }
+  /* Plain "i" in a CSS-drawn circle, not the "ⓘ" Unicode glyph -- that
+     character isn't covered by every system font and was rendering as a
+     tofu/question-mark box on some systems. */
   #accuracy-notice {
-    display: none; color: #898781; cursor: help; font-size: 0.85rem;
+    display: none; width: 13px; height: 13px; line-height: 12px; text-align: center;
+    border-radius: 50%; border: 1px solid #898781; color: #898781; cursor: help;
+    font: italic 9px/12px Georgia, serif; flex: none;
   }
 
   /* --- Main row: left panel (3D/2D toggle) + right panel (charts). Both
@@ -94,7 +99,7 @@
       <div id="param-controls"></div>
       <div id="accuracy-readout">
         <span>Top-<span id="accuracy-n"></span> accuracy: <span id="accuracy-value"></span></span>
-        <span id="accuracy-notice">ⓘ</span>
+        <span id="accuracy-notice">i</span>
       </div>
     </div>
     <span id="status">Loading…</span>
