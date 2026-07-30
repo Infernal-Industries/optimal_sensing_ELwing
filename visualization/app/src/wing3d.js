@@ -410,6 +410,7 @@ export function createWingScene(container, manifest, payload, opts = {}) {
   let acc = 0;
   let lastT = performance.now();
   let visible = true;
+  let paused = false;
 
   let running = true;
   function animate(t) {
@@ -418,9 +419,16 @@ export function createWingScene(container, manifest, payload, opts = {}) {
     lastT = t;
     acc += dt;
     const msPerFrame = (payload.period_ms / payload.frames) * (BASE_SLOW_MOTION_FACTOR / speedMultiplier);
-    while (acc >= msPerFrame) {
-      acc -= msPerFrame;
-      frameIdx = (frameIdx + 1) % payload.frames;
+    // Paused: skip advancing frameIdx, but still fall through to the render/
+    // onFrame calls below unconditionally (same reasoning as `visible` above
+    // -- other views must keep seeing a consistent, up-to-date snapshot even
+    // while this clock isn't ticking, e.g. a pause-triggered seekTo() should
+    // show up on the very next tick, not wait for an unpause).
+    if (!paused) {
+      while (acc >= msPerFrame) {
+        acc -= msPerFrame;
+        frameIdx = (frameIdx + 1) % payload.frames;
+      }
     }
     // The rAF loop is the app's shared animation clock (drives wing2d.js's
     // setFrame + timelines.js's playhead via opts.onFrame) even while this
@@ -487,5 +495,17 @@ export function createWingScene(container, manifest, payload, opts = {}) {
       }
     },
     resize,
+    setPaused(p) {
+      paused = p;
+    },
+    /** Jumps the animation to a specific time within one wingbeat (ms), e.g. from
+     * clicking a point on timelines.js's strain/P(fire) charts. Takes effect on the
+     * next animate() tick -- the rAF loop keeps running even while paused, it just
+     * stops advancing frameIdx, so no separate immediate re-render is needed here. */
+    seekTo(ms) {
+      const frac = ((ms / payload.period_ms) % 1 + 1) % 1; // wrap negative/over-range safely
+      frameIdx = Math.min(payload.frames - 1, Math.round(frac * payload.frames));
+      acc = 0;
+    },
   };
 }

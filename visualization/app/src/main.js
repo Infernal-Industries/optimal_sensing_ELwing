@@ -48,6 +48,9 @@ async function main() {
     let show3d = true;
     let yaw = 0;
     let pitch = 0;
+    // Also hoisted for the same reason: a stiffness/axis reload must not silently
+    // resume playback if the user had paused (e.g. by clicking a chart) beforehand.
+    let paused = false;
 
     // wing/wing2d/timelines/histogram are reassigned on every dataset (re)load --
     // declared with `let` so closures created below (pushThreshold, the sensor-count
@@ -60,6 +63,22 @@ async function main() {
     function selectSensor(sensorIdx1) {
       timelines.setSensor(sensorIdx1 - 1);
       histogram.setSensor(sensorIdx1 - 1);
+    }
+
+    // Clicking a point on either Strain/P(fire) chart pauses the animation there
+    // (timelines.js already pinned both charts' crosshair/tooltip at `ms` before
+    // calling this). playPauseBtn is declared further down (with the other param
+    // controls) but this is only ever invoked later, from a real click, by which
+    // point it's assigned -- see the `let`/closure pattern already used for
+    // wing/timelines/etc. throughout this file.
+    function onChartSeek(ms) {
+      paused = true;
+      wing.setPaused(true);
+      wing.seekTo(ms);
+      updatePlayButtonLabel();
+    }
+    function updatePlayButtonLabel() {
+      playPauseBtn.textContent = paused ? "▶" : "⏸";
     }
 
     // computePFireAll recomputes P(fire) for all ~1300 sensors x 2 conditions in both
@@ -109,7 +128,7 @@ async function main() {
 
       statusEl.textContent = `${setEntry.id} · stiffness factor ${setEntry.stiffnessFactor} · axis ${setEntry.axis}${quickNote}`;
 
-      timelines = createTimelines(timelinesWrap, manifest, payload, computePFire);
+      timelines = createTimelines(timelinesWrap, manifest, payload, computePFire, { onSeek: onChartSeek });
       histogram = createHistogram(histogramWrap, manifest, payload);
 
       wing2d = createWing2D(wing2dCanvases, manifest, payload, { onSelectSensor: selectSensor });
@@ -138,6 +157,7 @@ async function main() {
       wing.setRotation(yaw, pitch);
       wing.setVisible(show3d);
       wing2d.setVisible(!show3d);
+      wing.setPaused(paused);
       accuracyN.textContent = String(sensorCount);
       accuracyValue.textContent = `${(payload.accuracyBySensorCount[sensorCount - 1] * 100).toFixed(0)}%`;
       updateAccuracyNotice();
@@ -213,6 +233,23 @@ async function main() {
       format: (v) => `×${v.toFixed(1)}`,
       onChange: (v) => wing.setSpeed(v),
     });
+
+    // Play/pause, right next to Animation speed since it controls the same clock.
+    // Resuming clears any pinned chart tooltip (see timelines.js's clearPin) --
+    // pausing via this button (rather than by clicking a chart) doesn't pin
+    // anything, so clearPin is a harmless no-op in that case.
+    const playPauseBtn = document.createElement("button");
+    playPauseBtn.type = "button";
+    playPauseBtn.style.cssText =
+      "background:#12151c;color:#e6e6e6;border:1px solid #3d5166;border-radius:4px;padding:2px 10px;font:0.8rem system-ui,sans-serif;cursor:pointer;";
+    updatePlayButtonLabel();
+    playPauseBtn.addEventListener("click", () => {
+      paused = !paused;
+      wing.setPaused(paused);
+      updatePlayButtonLabel();
+      if (!paused) timelines.clearPin();
+    });
+    paramControls.appendChild(playPauseBtn);
 
     // --- Sensor count: bounded by data availability (only top-10 exported),
     // not a resolution ladder -- both bar and text stay 1-10.

@@ -42,7 +42,7 @@ function niceTicks(min, max, count) {
  * 1:1 to real screen coordinates -- this also fixes the tooltip position
  * for free, which previously mixed viewBox units with CSS px.
  * @param {HTMLElement} container
- * @param {{title:string, yFormat:(v:number)=>string}} opts
+ * @param {{title:string, yFormat:(v:number)=>string, onClickTime?:(ms:number)=>void}} opts
  */
 function createChart(container, opts) {
   const root = document.createElement("div");
@@ -115,6 +115,11 @@ function createChart(container, opts) {
   let yDomain = [0, 1];
   let seriesData = { flap: [], rotate: [] }; // arrays of {x, y}
   let lastPlayheadX = 0;
+  // null = normal hover mode. Non-null = crosshair/tooltip pinned at this x (set by
+  // clicking the chart, see the click handler below), and pointermove/pointerleave
+  // stop reacting to the pointer until unpinned -- "keeps the display open... until
+  // it is unpaused or a different time is selected."
+  let pinnedX = null;
 
   function xScale(x) {
     return PAD.left + ((x - xDomain[0]) / (xDomain[1] - xDomain[0])) * (W - PAD.left - PAD.right);
@@ -188,12 +193,11 @@ function createChart(container, opts) {
   });
   resizeObserver.observe(svg);
 
-  hitRect.addEventListener("pointermove", (ev) => {
-    const rect = svg.getBoundingClientRect();
-    const svgX = ((ev.clientX - rect.left) / rect.width) * W;
-    const t = xDomain[0] + ((svgX - PAD.left) / (W - PAD.left - PAD.right)) * (xDomain[1] - xDomain[0]);
+  // Finds the seriesData.flap point nearest a given x (ms) -- shared by hover,
+  // click-to-pin, and re-displaying the pin after data changes (setSeries).
+  function nearestIndexForTime(t) {
     const flapPts = seriesData.flap;
-    if (!flapPts.length) return;
+    if (!flapPts.length) return -1;
     let idx = 0;
     let best = Infinity;
     for (let i = 0; i < flapPts.length; i++) {
@@ -203,7 +207,16 @@ function createChart(container, opts) {
         idx = i;
       }
     }
-    const nearestX = flapPts[idx].x;
+    return idx;
+  }
+
+  // Shows the crosshair+tooltip at the data point nearest time `t` (ms). Used for
+  // both live hover and the pinned (paused) display -- same visual, different
+  // trigger/lifetime.
+  function showAt(t) {
+    const idx = nearestIndexForTime(t);
+    if (idx < 0) return;
+    const nearestX = seriesData.flap[idx].x;
     crosshair.setAttribute("x1", xScale(nearestX));
     crosshair.setAttribute("x2", xScale(nearestX));
     crosshair.setAttribute("opacity", 1);
@@ -220,10 +233,30 @@ function createChart(container, opts) {
     // applyResize) since W/H track the SVG's actual rendered size.
     tooltip.style.left = `${xScale(nearestX) + 8}px`;
     tooltip.style.top = "4px";
+  }
+
+  function timeFromEvent(ev) {
+    const rect = svg.getBoundingClientRect();
+    const svgX = ((ev.clientX - rect.left) / rect.width) * W;
+    return xDomain[0] + ((svgX - PAD.left) / (W - PAD.left - PAD.right)) * (xDomain[1] - xDomain[0]);
+  }
+
+  hitRect.addEventListener("pointermove", (ev) => {
+    if (pinnedX !== null) return; // pinned: hover no longer changes the display
+    showAt(timeFromEvent(ev));
   });
   hitRect.addEventListener("pointerleave", () => {
+    if (pinnedX !== null) return; // pinned: stays visible after the pointer leaves
     crosshair.setAttribute("opacity", 0);
     tooltip.style.display = "none";
+  });
+  hitRect.addEventListener("click", (ev) => {
+    const idx = nearestIndexForTime(timeFromEvent(ev));
+    if (idx < 0) return;
+    const nearestX = seriesData.flap[idx].x;
+    pinnedX = nearestX;
+    showAt(nearestX);
+    if (opts.onClickTime) opts.onClickTime(nearestX);
   });
 
   function setPlayheadX(x) {
@@ -241,8 +274,20 @@ function createChart(container, opts) {
     setSeries(flapPts, rotatePts) {
       seriesData = { flap: flapPts, rotate: rotatePts };
       render();
+      // Pausing at a time, then switching sensor/threshold, should keep showing
+      // that same paused time's values against the new data, not go stale.
+      if (pinnedX !== null) showAt(pinnedX);
     },
     setPlayheadX,
+    setPinned(x) {
+      pinnedX = x;
+      showAt(x);
+    },
+    clearPinned() {
+      pinnedX = null;
+      crosshair.setAttribute("opacity", 0);
+      tooltip.style.display = "none";
+    },
     dispose() {
       resizeObserver.disconnect();
     },
@@ -254,8 +299,11 @@ function createChart(container, opts) {
  * @param {object} manifest
  * @param {object} payload
  * @param {import("./encoding.js")} encodingModule - pass computePFire in
+ * @param {{onSeek?: (ms:number) => void}} [opts] - onSeek fires when the user clicks
+ *   either chart, after both charts have been pinned in sync at that time; main.js
+ *   uses it to pause and seek the 3D/2D animation to match.
  */
-export function createTimelines(container, manifest, payload, computePFire) {
+export function createTimelines(container, manifest, payload, computePFire, opts = {}) {
   // Each chart's root is `position:absolute;inset:0` (see createChart) so it can
   // ResizeObserver-track its own slot's exact pixel size -- it needs its OWN
   // positioned wrapper, not to share `container` directly with the other chart
@@ -266,13 +314,24 @@ export function createTimelines(container, manifest, payload, computePFire) {
   const pfireWrap = document.createElement("div");
   container.appendChild(pfireWrap);
 
+  // Clicking either chart pins BOTH in sync -- they share one time axis and one
+  // paused/unpaused state, so the point of pausing at a time is to see both
+  // charts' values there, not just the one that happened to be clicked.
+  function pinBoth(ms) {
+    strainChart.setPinned(ms);
+    pfireChart.setPinned(ms);
+    if (opts.onSeek) opts.onSeek(ms);
+  }
+
   const strainChart = createChart(strainWrap, {
     title: "Strain",
     yFormat: (v) => v.toExponential(1),
+    onClickTime: pinBoth,
   });
   const pfireChart = createChart(pfireWrap, {
     title: "P(fire)",
     yFormat: (v) => v.toFixed(2),
+    onClickTime: pinBoth,
   });
 
   let sensorIdx = payload.optimalSensors.top1 - 1; // 0-based
@@ -339,6 +398,11 @@ export function createTimelines(container, manifest, payload, computePFire) {
     },
     getSensorIdx() {
       return sensorIdx;
+    },
+    // Called by main.js's Play button on resume, to drop back into normal hover mode.
+    clearPin() {
+      strainChart.clearPinned();
+      pfireChart.clearPinned();
     },
     dispose() {
       strainChart.dispose();
