@@ -240,8 +240,11 @@ async function main() {
     // anything, so clearPin is a harmless no-op in that case.
     const playPauseBtn = document.createElement("button");
     playPauseBtn.type = "button";
+    // Fixed square size (not padding-driven) so "⏸" and "▶" -- different glyph
+    // widths -- never make the button change shape when it toggles.
     playPauseBtn.style.cssText =
-      "background:#12151c;color:#e6e6e6;border:1px solid #3d5166;border-radius:4px;padding:2px 10px;font:0.8rem system-ui,sans-serif;cursor:pointer;";
+      "background:#12151c;color:#e6e6e6;border:1px solid #3d5166;border-radius:4px;font:0.8rem system-ui,sans-serif;cursor:pointer;" +
+      "width:28px;height:28px;padding:0;flex:none;display:flex;align-items:center;justify-content:center;box-sizing:border-box;";
     updatePlayButtonLabel();
     playPauseBtn.addEventListener("click", () => {
       paused = !paused;
