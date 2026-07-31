@@ -213,8 +213,8 @@ export function createHistogram(container, manifest, payload) {
   const gapNote = document.createElement("div");
   gapNote.style.cssText = `color:${INK_MUTED};font:0.68rem system-ui,sans-serif;margin-top:4px;max-width:100%;`;
   gapNote.textContent =
-    '"⋯" marks stretches of the wingbeat with no spikes at all, so the axis skips past them. ' +
-    "The fewer, narrower bursts of activity you see, the more tightly the spike timing clusters together across simulated wingbeats.";
+    '"⋯" marks stretches of the wingbeat with no spikes at all, thus ommitted in the time-axis. ' +
+    "The fewer bars in each burst of spikes you see, the tighter the bars in that burst and the more consistently the spikes occur at a given time.";
   root.appendChild(gapNote);
 
   container.appendChild(root);
