@@ -58,12 +58,6 @@ async function main() {
     // actually comparing different physical sensors. null = no manual pick
     // yet, fall back to the current set's top1.
     let selectedSensorIdx1 = null;
-    // TEMP: also hoisted -- histogram.js's gap-collapsing "⋯" debug toggle
-    // (see the checkbox further down) defaults to enabled=true on every new
-    // histogram instance, so without persisting the user's choice here, a
-    // stiffness/axis reload silently re-enabled it out from under an
-    // unchecked checkbox.
-    let histogramEllipsisEnabled = true;
 
     // wing/wing2d/timelines/histogram are reassigned on every dataset (re)load --
     // declared with `let` so closures created below (pushThreshold, the sensor-count
@@ -169,7 +163,6 @@ async function main() {
       timelines.setThreshold(nldGrad, nldShift, staFreq);
       wing2d.setThreshold(nldGrad, nldShift, staFreq);
       histogram.setThreshold(nldGrad, nldShift, staFreq);
-      histogram.setEllipsisEnabled(histogramEllipsisEnabled);
       wing.setSensorCount(sensorCount);
       wing2d.setSensorCount(sensorCount);
       wing.setRotation(yaw, pitch);
@@ -320,26 +313,6 @@ async function main() {
       if (!paused) timelines.clearPin();
     });
     paramControls.appendChild(playPauseBtn);
-
-    // TEMP: debug checkbox for the histogram's gap-collapsing "⋯" feature --
-    // lets us quickly A/B the collapsed vs native-resolution axis. Remove
-    // this control (and histogram.js's setEllipsisEnabled) once no longer
-    // needed. References the outer `histogram` let-binding, so it keeps
-    // working across loadAndMount reloads (a fresh histogram instance
-    // starts back at its own default of enabled=true).
-    const ellipsisToggle = document.createElement("label");
-    ellipsisToggle.style.cssText =
-      "display:flex;align-items:center;gap:4px;font:0.72rem system-ui,sans-serif;color:#c3c2b7;white-space:nowrap;cursor:pointer;";
-    const ellipsisCheckbox = document.createElement("input");
-    ellipsisCheckbox.type = "checkbox";
-    ellipsisCheckbox.checked = true;
-    ellipsisCheckbox.addEventListener("change", () => {
-      histogramEllipsisEnabled = ellipsisCheckbox.checked;
-      histogram.setEllipsisEnabled(histogramEllipsisEnabled);
-    });
-    ellipsisToggle.appendChild(ellipsisCheckbox);
-    ellipsisToggle.appendChild(document.createTextNode("Histogram ⋯ (temp)"));
-    paramControls.appendChild(ellipsisToggle);
   } catch (err) {
     statusEl.textContent = `Failed to load: ${err.message}`;
     console.error(err);

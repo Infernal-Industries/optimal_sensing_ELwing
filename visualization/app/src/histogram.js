@@ -85,12 +85,8 @@ function findCollapsibleGaps(counts, nBins, dt) {
  *   bin time"; isTrailing means "no later data, so omit the right label
  *   entirely" (per the user's labeling rule).
  */
-function buildSegments(counts, nBins, dt, ellipsisEnabled) {
-  // TEMP: ellipsisEnabled is a debug toggle (see createHistogram's
-  // setEllipsisEnabled) to compare against the uncollapsed, native-resolution
-  // axis -- when off, skip gap detection entirely so every bin gets its own
-  // 'data' segment share of the width.
-  const gaps = ellipsisEnabled ? findCollapsibleGaps(counts, nBins, dt) : [];
+function buildSegments(counts, nBins, dt) {
+  const gaps = findCollapsibleGaps(counts, nBins, dt);
   const segments = [];
   let cursor = 0;
   for (const g of gaps) {
@@ -208,15 +204,25 @@ export function createHistogram(container, manifest, payload) {
   }
   root.appendChild(legend);
 
+  // Plain-language explainer for the "⋯" gap markers -- without this, a
+  // reader has no way to know those breaks are a deliberate axis compression
+  // (skipped silent stretches) rather than missing data. Framed around what
+  // it means for the underlying biology (how consistent spike timing is
+  // wingbeat-to-wingbeat), not the chart mechanics ("bins"/"segments"),
+  // since that's the part worth understanding at a glance.
+  const gapNote = document.createElement("div");
+  gapNote.style.cssText = `color:${INK_MUTED};font:0.68rem system-ui,sans-serif;margin-top:4px;max-width:100%;`;
+  gapNote.textContent =
+    '"⋯" marks stretches of the wingbeat with no spikes at all, so the axis skips past them. ' +
+    "The fewer, narrower bursts of activity you see, the more tightly the spike timing clusters together across simulated wingbeats.";
+  root.appendChild(gapNote);
+
   container.appendChild(root);
 
   let sensorIdx = payload.optimalSensors.top1 - 1; // 0-based
   let nldGrad = manifest.encoding.nldGrad;
   let nldShift = manifest.encoding.nldShift;
   let staFreq = manifest.encoding.staFreq;
-  // TEMP: debug toggle for the gap-collapsing "⋯" feature -- see
-  // setEllipsisEnabled below and main.js's temporary checkbox.
-  let ellipsisEnabled = true;
 
   // recompute() does the stochastic sampling (samplePSTH draws fresh random
   // spike trains every call) and caches the result in `counts`, plus the
@@ -241,7 +247,7 @@ export function createHistogram(container, manifest, payload) {
     }
     const nBins = counts.flap.length;
     const dt = payload.period_ms / nBins;
-    segments = buildSegments(counts, nBins, dt, ellipsisEnabled);
+    segments = buildSegments(counts, nBins, dt);
     note.textContent =
       `Sensor #${sensorIdx + 1}, ${N_REPS} simulated wingbeats per condition (client-side, refractory period ` +
       `${manifest.encoding.refPer}ms), spike trains sampled from the real P(fire) curve above.`;
@@ -430,12 +436,6 @@ export function createHistogram(container, manifest, payload) {
       nldGrad = newNldGrad;
       nldShift = newNldShift;
       staFreq = newStaFreq;
-      recompute();
-    },
-    // TEMP: debug toggle -- remove along with the checkbox in main.js once
-    // the ellipsis feature no longer needs an easy side-by-side comparison.
-    setEllipsisEnabled(v) {
-      ellipsisEnabled = v;
       recompute();
     },
     // main.js recreates this on every dataset reload (every stiffness/axis
