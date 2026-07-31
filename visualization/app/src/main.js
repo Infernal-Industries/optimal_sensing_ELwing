@@ -208,6 +208,30 @@ async function main() {
       loadAndMount(match).then(applyPanelVisibility);
     });
 
+    // Controls listed in order: Wing stiffness, Neural threshold, Sensor count
+    // shown, Animation speed (+ its play/pause button).
+
+    // --- Wing stiffness E: the resolution-ladder case (Plan §7). Phase 5's Medium
+    // grid precomputes 10 stiffness values (deduped here -- manifest.sets has one
+    // entry per axis, so raw stiffnessFactor values repeat 3x) at the current axis;
+    // picking a grid point reloads the matching precomputed set immediately (dragging
+    // across notches fires a reload per notch, same as before Apply-gating existed).
+    const uniqueStiffness = [...new Set(manifest.sets.map((s) => s.stiffnessFactor))];
+    createResolutionLadderControl(paramControls, {
+      label: "Wing stiffness factor (E)",
+      points: uniqueStiffness,
+      value: firstSet.stiffnessFactor,
+      floor: STIFFNESS_FLOOR,
+      onChange: (v) => {
+        const match = manifest.sets.find((s) => s.stiffnessFactor === v && s.axis === currentSet.axis);
+        if (!match) {
+          statusEl.textContent = `Stiffness factor ${v} isn't precomputed at axis "${currentSet.axis}" — showing the previous set. ${quickNote}`;
+          return;
+        }
+        loadAndMount(match).then(applyPanelVisibility);
+      },
+    });
+
     // Neural threshold (β) is a genuine independent variable of the paper (title:
     // "wing structure AND neural encoding jointly determine sensing strategies"),
     // co-equal with wing stiffness E -- kept editable. Slope (α) and filter frequency
@@ -227,6 +251,27 @@ async function main() {
         pushThreshold();
       },
     });
+
+    // --- Sensor count: bounded by data availability (only top-10 exported),
+    // not a resolution ladder -- both bar and text stay 1-10.
+    accuracyN.textContent = "10";
+    accuracyValue.textContent = `${(currentPayload.accuracyBySensorCount[9] * 100).toFixed(0)}%`;
+    createLiveDualControl(paramControls, {
+      label: "Sensor count shown",
+      min: 1,
+      max: 10,
+      step: 1,
+      value: 10,
+      format: (v) => String(Math.round(v)),
+      onChange: (v) => {
+        sensorCount = Math.round(v);
+        wing.setSensorCount(sensorCount);
+        wing2d.setSensorCount(sensorCount);
+        accuracyN.textContent = String(sensorCount);
+        accuracyValue.textContent = `${(currentPayload.accuracyBySensorCount[sensorCount - 1] * 100).toFixed(0)}%`;
+      },
+    });
+
     createLiveDualControl(paramControls, {
       label: "Animation speed",
       min: 0.1,
@@ -256,47 +301,6 @@ async function main() {
       if (!paused) timelines.clearPin();
     });
     paramControls.appendChild(playPauseBtn);
-
-    // --- Sensor count: bounded by data availability (only top-10 exported),
-    // not a resolution ladder -- both bar and text stay 1-10.
-    accuracyN.textContent = "10";
-    accuracyValue.textContent = `${(currentPayload.accuracyBySensorCount[9] * 100).toFixed(0)}%`;
-    createLiveDualControl(paramControls, {
-      label: "Sensor count shown",
-      min: 1,
-      max: 10,
-      step: 1,
-      value: 10,
-      format: (v) => String(Math.round(v)),
-      onChange: (v) => {
-        sensorCount = Math.round(v);
-        wing.setSensorCount(sensorCount);
-        wing2d.setSensorCount(sensorCount);
-        accuracyN.textContent = String(sensorCount);
-        accuracyValue.textContent = `${(currentPayload.accuracyBySensorCount[sensorCount - 1] * 100).toFixed(0)}%`;
-      },
-    });
-
-    // --- Wing stiffness E: the resolution-ladder case (Plan §7). Phase 5's Medium
-    // grid precomputes 10 stiffness values (deduped here -- manifest.sets has one
-    // entry per axis, so raw stiffnessFactor values repeat 3x) at the current axis;
-    // picking a grid point reloads the matching precomputed set immediately (dragging
-    // across notches fires a reload per notch, same as before Apply-gating existed).
-    const uniqueStiffness = [...new Set(manifest.sets.map((s) => s.stiffnessFactor))];
-    createResolutionLadderControl(paramControls, {
-      label: "Wing stiffness factor (E)",
-      points: uniqueStiffness,
-      value: firstSet.stiffnessFactor,
-      floor: STIFFNESS_FLOOR,
-      onChange: (v) => {
-        const match = manifest.sets.find((s) => s.stiffnessFactor === v && s.axis === currentSet.axis);
-        if (!match) {
-          statusEl.textContent = `Stiffness factor ${v} isn't precomputed at axis "${currentSet.axis}" — showing the previous set. ${quickNote}`;
-          return;
-        }
-        loadAndMount(match).then(applyPanelVisibility);
-      },
-    });
   } catch (err) {
     statusEl.textContent = `Failed to load: ${err.message}`;
     console.error(err);
