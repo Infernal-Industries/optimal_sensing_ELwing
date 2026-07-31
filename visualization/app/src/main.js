@@ -58,6 +58,12 @@ async function main() {
     // actually comparing different physical sensors. null = no manual pick
     // yet, fall back to the current set's top1.
     let selectedSensorIdx1 = null;
+    // TEMP: also hoisted -- histogram.js's gap-collapsing "⋯" debug toggle
+    // (see the checkbox further down) defaults to enabled=true on every new
+    // histogram instance, so without persisting the user's choice here, a
+    // stiffness/axis reload silently re-enabled it out from under an
+    // unchecked checkbox.
+    let histogramEllipsisEnabled = true;
 
     // wing/wing2d/timelines/histogram are reassigned on every dataset (re)load --
     // declared with `let` so closures created below (pushThreshold, the sensor-count
@@ -163,6 +169,7 @@ async function main() {
       timelines.setThreshold(nldGrad, nldShift, staFreq);
       wing2d.setThreshold(nldGrad, nldShift, staFreq);
       histogram.setThreshold(nldGrad, nldShift, staFreq);
+      histogram.setEllipsisEnabled(histogramEllipsisEnabled);
       wing.setSensorCount(sensorCount);
       wing2d.setSensorCount(sensorCount);
       wing.setRotation(yaw, pitch);
@@ -327,7 +334,8 @@ async function main() {
     ellipsisCheckbox.type = "checkbox";
     ellipsisCheckbox.checked = true;
     ellipsisCheckbox.addEventListener("change", () => {
-      histogram.setEllipsisEnabled(ellipsisCheckbox.checked);
+      histogramEllipsisEnabled = ellipsisCheckbox.checked;
+      histogram.setEllipsisEnabled(histogramEllipsisEnabled);
     });
     ellipsisToggle.appendChild(ellipsisCheckbox);
     ellipsisToggle.appendChild(document.createTextNode("Histogram ⋯ (temp)"));
