@@ -251,7 +251,14 @@ export function createHistogram(container, manifest, payload) {
       };
     }
 
-    const fmt = (v) => (v === null ? "no spikes" : `${v.toFixed(1)}ms`);
+    // 2 decimal places, not 1 -- unbroken regions are often only ~1ms wide
+    // (native sample resolution), so two genuinely different means (e.g.
+    // 8.02ms vs 8.07ms) previously both rounded to the same "8.0ms" in this
+    // text even though the graphed mean lines (which use the full-precision
+    // value for their pixel position) visibly landed apart. The underlying
+    // stat was always correct -- only this display rounding hid the real
+    // difference.
+    const fmt = (v) => (v === null ? "no spikes" : `${v.toFixed(2)}ms`);
     statsEl.innerHTML = dataSegs
       .map((seg, i) => {
         const range = `${Math.round(seg.start * dt)}–${Math.round((seg.end - 1) * dt)}ms`;
