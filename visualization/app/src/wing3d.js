@@ -107,13 +107,14 @@ export function createWingScene(container, manifest, payload, opts = {}) {
   // must NOT look straight down -Z (a near-face-on view like (0, y, largeZ)
   // foreshortens Z-motion to nearly nothing on screen -- this was the Phase 1
   // bug caught by the screenshot check). A large X offset keeps the bend axis
-  // clearly transverse to the view direction. The camera is now fixed in
-  // world space (rotation is per-wing, not an orbit) -- only its DISTANCE
-  // along this same direction changes, in resize()/wheel-zoom, to keep both
-  // wings framed at any panel aspect ratio.
+  // clearly transverse to the view direction. Each wing gets its OWN camera
+  // (same camDir, rotation is per-wing not an orbit), rendered into its own
+  // half of the canvas via scissor/viewport -- this is what centers each
+  // wing within its own half rather than centering the pair as a whole within
+  // the full container (which left both wings clustered near the container's
+  // center instead of near each half's center).
   const camDir = new THREE.Vector3(1.5, 1.1, 1.6).normalize();
-  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 2000);
-  const target = new THREE.Vector3(0, spanMm * 0.5, 0);
+  const cameras = { flap: new THREE.PerspectiveCamera(45, 1, 0.1, 2000), rotate: new THREE.PerspectiveCamera(45, 1, 0.1, 2000) };
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   container.appendChild(renderer.domElement);
@@ -260,21 +261,25 @@ export function createWingScene(container, manifest, payload, opts = {}) {
     }
   }
 
-  // --- Camera framing: fixed direction, distance re-derived on resize/zoom
-  // so both wings stay in frame at any panel aspect ratio (a fixed camera
-  // position, as this scene used to have when it always filled the full
-  // viewport width, crops the wings once the panel narrows to half-width).
+  // --- Camera framing: fixed direction per wing, distance re-derived on
+  // resize/zoom so each wing individually fills (and stays centered within)
+  // its own half-width viewport at any panel aspect ratio. Radius covers just
+  // ONE wing (no `gap` term) since each camera only ever needs to frame the
+  // single wing it's assigned to.
   let zoom = 1;
-  const sceneRadius = Math.sqrt((gap * 0.5 + chordMm * 0.5) ** 2 + (spanMm * 0.5) ** 2) * 1.15;
-  function placeCamera() {
+  const wingRadius = Math.sqrt((chordMm * 0.5) ** 2 + (spanMm * 0.5) ** 2) * 1.15;
+  function placeCamera(cond) {
     const w = container.clientWidth;
     const h = container.clientHeight;
     if (!w || !h) return;
+    const halfW = w / 2;
+    const camera = cameras[cond];
+    const target = pivots[cond].position;
     const vFov = (camera.fov * Math.PI) / 180;
-    const aspect = w / h;
+    const aspect = halfW / h;
     const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
     const limitingFov = Math.min(vFov, hFov);
-    const fitDist = sceneRadius / Math.sin(limitingFov / 2);
+    const fitDist = wingRadius / Math.sin(limitingFov / 2);
     camera.position.copy(target).addScaledVector(camDir, fitDist / zoom);
     camera.lookAt(target);
   }
@@ -285,21 +290,35 @@ export function createWingScene(container, manifest, payload, opts = {}) {
     if (!w || !h) return; // container hidden (display:none) or not yet laid out -- avoid aspect=Infinity/NaN
     renderer.setSize(w, h);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
-    placeCamera();
+    const halfW = w / 2;
+    for (const cond of conditions) {
+      cameras[cond].aspect = halfW / h;
+      cameras[cond].updateProjectionMatrix();
+      placeCamera(cond);
+    }
   }
   const resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(container);
   resize();
 
+  // x-origin (in CSS px) of each condition's half of the canvas -- flap on
+  // the left, rotate on the right, matching viewportRectFor() below.
+  function viewportRectFor(cond) {
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    const halfW = w / 2;
+    const x = cond === conditions[0] ? 0 : halfW;
+    return { x, y: 0, w: halfW, h };
+  }
+
   function updateLabelPositions() {
     if (!container.clientWidth || !container.clientHeight) return;
     conditions.forEach((cond) => {
+      const rect = viewportRectFor(cond);
       const worldPos = new THREE.Vector3(pivots[cond].position.x, spanMm * 1.02, 0);
-      worldPos.project(camera);
-      const x = (worldPos.x * 0.5 + 0.5) * container.clientWidth;
-      const y = (-worldPos.y * 0.5 + 0.5) * container.clientHeight;
+      worldPos.project(cameras[cond]);
+      const x = rect.x + (worldPos.x * 0.5 + 0.5) * rect.w;
+      const y = (-worldPos.y * 0.5 + 0.5) * rect.h;
       labels[cond].style.transform = `translate(${x - 60}px, ${y}px)`;
     });
   }
@@ -323,11 +342,17 @@ export function createWingScene(container, manifest, payload, opts = {}) {
   const raycaster = new THREE.Raycaster();
   function pickAt(clientX, clientY) {
     const rect = renderer.domElement.getBoundingClientRect();
+    const localX = clientX - rect.left;
+    const halfW = rect.width / 2;
+    // Which condition's half was clicked determines which camera the pick
+    // ray is cast from -- each half now has its own independent camera.
+    const cond = localX < halfW ? conditions[0] : conditions[1];
+    const originX = cond === conditions[0] ? 0 : halfW;
     const ndc = new THREE.Vector2(
-      ((clientX - rect.left) / rect.width) * 2 - 1,
+      ((localX - originX) / halfW) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1
     );
-    raycaster.setFromCamera(ndc, camera);
+    raycaster.setFromCamera(ndc, cameras[cond]);
     // recursive:false -- markers are mesh children, and a recursive
     // intersectObjects would otherwise return the MARKER's own face indices
     // (a small sphere geometry) as if they were wing-surface hits. Both wing
@@ -388,7 +413,7 @@ export function createWingScene(container, manifest, payload, opts = {}) {
   function onWheel(ev) {
     ev.preventDefault();
     zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom * (1 - ev.deltaY * 0.001)));
-    placeCamera();
+    for (const cond of conditions) placeCamera(cond);
   }
 
   renderer.domElement.style.cursor = "grab";
@@ -442,7 +467,24 @@ export function createWingScene(container, manifest, payload, opts = {}) {
     if (visible) {
       conditions.forEach((cond) => applyFrame(cond, frameIdx));
       updateLabelPositions();
-      renderer.render(scene, camera);
+      // Each wing renders into its own half-width viewport/scissor rect with
+      // its own camera, so it's centered within its own half rather than the
+      // pair being centered as a whole within the full container.
+      renderer.setScissorTest(true);
+      for (const cond of conditions) {
+        const rect = viewportRectFor(cond);
+        renderer.setViewport(rect.x, rect.y, rect.w, rect.h);
+        renderer.setScissor(rect.x, rect.y, rect.w, rect.h);
+        // Hide the OTHER wing while rendering this half: each camera is now
+        // zoomed in tight on just its own wing, but at some yaw/pitch angles
+        // the neighboring wing's edge can still fall inside this camera's
+        // frustum and bleed into this viewport (scissor only clips WHICH
+        // PIXELS get written, not which objects are eligible to write them).
+        for (const other of conditions) pivots[other].visible = other === cond;
+        renderer.render(scene, cameras[cond]);
+      }
+      for (const cond of conditions) pivots[cond].visible = true;
+      renderer.setScissorTest(false);
     }
     if (opts.onFrame) {
       // Real (non-slow-motion) time within the wingbeat, matching

@@ -51,14 +51,18 @@
   }
   #canvas-wrap, #wing2d-wrap { position: absolute; inset: 0; }
   #wing2d-wrap {
-    display: flex; align-items: center; justify-content: center; gap: 1.5rem;
+    display: flex; align-items: center; justify-content: center;
     padding: 0.5rem;
   }
-  #wing2d-canvases { display: flex; gap: 1.5rem; height: 100%; }
+  /* grid (not flex+gap) so each condition gets an equal-width column and is
+     centered WITHIN that column, instead of the pair being centered as one
+     block within the full panel (which left both canvases clustered off to
+     one side rather than each centered in its own half). */
+  #wing2d-canvases { display: grid; grid-template-columns: 1fr 1fr; height: 100%; width: 100%; }
   /* title row (auto height) + canvas (flex:1, fills the REST -- not height:100%,
      which would overflow the column by the title's own height) */
-  #wing2d-canvases > div { display: flex; flex-direction: column; align-items: center; height: 100%; min-width: 0; min-height: 0; }
-  #wing2d-canvases canvas { flex: 1; min-height: 0; width: auto; image-rendering: pixelated; cursor: pointer; }
+  #wing2d-canvases > div { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; min-width: 0; min-height: 0; }
+  #wing2d-canvases canvas { flex: 1; min-height: 0; width: auto; max-width: 100%; image-rendering: pixelated; cursor: pointer; }
 
   #panel-toggle {
     position: absolute; left: 0.6rem; bottom: 0.6rem; z-index: 2;
