@@ -85,8 +85,12 @@ function findCollapsibleGaps(counts, nBins, dt) {
  *   bin time"; isTrailing means "no later data, so omit the right label
  *   entirely" (per the user's labeling rule).
  */
-function buildSegments(counts, nBins, dt) {
-  const gaps = findCollapsibleGaps(counts, nBins, dt);
+function buildSegments(counts, nBins, dt, ellipsisEnabled) {
+  // TEMP: ellipsisEnabled is a debug toggle (see createHistogram's
+  // setEllipsisEnabled) to compare against the uncollapsed, native-resolution
+  // axis -- when off, skip gap detection entirely so every bin gets its own
+  // 'data' segment share of the width.
+  const gaps = ellipsisEnabled ? findCollapsibleGaps(counts, nBins, dt) : [];
   const segments = [];
   let cursor = 0;
   for (const g of gaps) {
@@ -210,6 +214,9 @@ export function createHistogram(container, manifest, payload) {
   let nldGrad = manifest.encoding.nldGrad;
   let nldShift = manifest.encoding.nldShift;
   let staFreq = manifest.encoding.staFreq;
+  // TEMP: debug toggle for the gap-collapsing "⋯" feature -- see
+  // setEllipsisEnabled below and main.js's temporary checkbox.
+  let ellipsisEnabled = true;
 
   // recompute() does the stochastic sampling (samplePSTH draws fresh random
   // spike trains every call) and caches the result in `counts`, plus the
@@ -234,7 +241,7 @@ export function createHistogram(container, manifest, payload) {
     }
     const nBins = counts.flap.length;
     const dt = payload.period_ms / nBins;
-    segments = buildSegments(counts, nBins, dt);
+    segments = buildSegments(counts, nBins, dt, ellipsisEnabled);
     note.textContent =
       `Sensor #${sensorIdx + 1}, ${N_REPS} simulated wingbeats per condition (client-side, refractory period ` +
       `${manifest.encoding.refPer}ms), spike trains sampled from the real P(fire) curve above.`;
@@ -423,6 +430,12 @@ export function createHistogram(container, manifest, payload) {
       nldGrad = newNldGrad;
       nldShift = newNldShift;
       staFreq = newStaFreq;
+      recompute();
+    },
+    // TEMP: debug toggle -- remove along with the checkbox in main.js once
+    // the ellipsis feature no longer needs an easy side-by-side comparison.
+    setEllipsisEnabled(v) {
+      ellipsisEnabled = v;
       recompute();
     },
     // main.js recreates this on every dataset reload (every stiffness/axis

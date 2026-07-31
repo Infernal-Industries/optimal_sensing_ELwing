@@ -313,6 +313,25 @@ async function main() {
       if (!paused) timelines.clearPin();
     });
     paramControls.appendChild(playPauseBtn);
+
+    // TEMP: debug checkbox for the histogram's gap-collapsing "⋯" feature --
+    // lets us quickly A/B the collapsed vs native-resolution axis. Remove
+    // this control (and histogram.js's setEllipsisEnabled) once no longer
+    // needed. References the outer `histogram` let-binding, so it keeps
+    // working across loadAndMount reloads (a fresh histogram instance
+    // starts back at its own default of enabled=true).
+    const ellipsisToggle = document.createElement("label");
+    ellipsisToggle.style.cssText =
+      "display:flex;align-items:center;gap:4px;font:0.72rem system-ui,sans-serif;color:#c3c2b7;white-space:nowrap;cursor:pointer;";
+    const ellipsisCheckbox = document.createElement("input");
+    ellipsisCheckbox.type = "checkbox";
+    ellipsisCheckbox.checked = true;
+    ellipsisCheckbox.addEventListener("change", () => {
+      histogram.setEllipsisEnabled(ellipsisCheckbox.checked);
+    });
+    ellipsisToggle.appendChild(ellipsisCheckbox);
+    ellipsisToggle.appendChild(document.createTextNode("Histogram ⋯ (temp)"));
+    paramControls.appendChild(ellipsisToggle);
   } catch (err) {
     statusEl.textContent = `Failed to load: ${err.message}`;
     console.error(err);
