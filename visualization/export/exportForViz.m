@@ -145,6 +145,20 @@ function result = exportOneSet(stiffnessFactor, axisName, opt)
 % Runs the full pipeline for one (stiffness, axis) combination and returns
 % a struct with the JSON-ready payload and its summary accuracy.
 
+% Deterministic seed, derived ONLY from stiffnessFactor (never axisName) --
+% whiteNoiseDisturbance.m draws from rand()/randn() with no seed of its own,
+% so re-running this same stiffness for yaw/pitch/roll previously gave three
+% independent noise realizations even for the 'flap' condition, whose
+% rotation rates are [0,0,0] regardless of axisName (see below) and so
+% should be physically IDENTICAL across all three axis exports. Seeding here
+% (before either condition's simulation) means 'flap' -- always simulated
+% first, with the same zero rotation inputs -- draws from the same RNG
+% state every time for a given stiffness, making it reproducible across
+% axes; 'rotate' still differs, both because its rotation input genuinely
+% differs per axis and because it's drawn from the RNG stream after 'flap'
+% has already consumed some of it.
+rng(round(stiffnessFactor * 10000));
+
 Pars = makeParameterStruct();
 Pars.E = stiffnessFactor * 3e7;
 Pars = applyQuickOverride(Pars, opt);
