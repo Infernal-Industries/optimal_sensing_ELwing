@@ -51,6 +51,13 @@ async function main() {
     // Also hoisted for the same reason: a stiffness/axis reload must not silently
     // resume playback if the user had paused (e.g. by clicking a chart) beforehand.
     let paused = false;
+    // Also hoisted: the currently-viewed sensor (1-indexed), so switching axis
+    // doesn't silently jump to the new dataset's own optimalSensors.top1 --
+    // each set's top1 differs (SSPOC optimizes per-axis discriminability), so
+    // without this, comparing "the same" sensor's flap trace across axes was
+    // actually comparing different physical sensors. null = no manual pick
+    // yet, fall back to the current set's top1.
+    let selectedSensorIdx1 = null;
 
     // wing/wing2d/timelines/histogram are reassigned on every dataset (re)load --
     // declared with `let` so closures created below (pushThreshold, the sensor-count
@@ -61,6 +68,7 @@ async function main() {
     // Shared by both the 3D and 2D pickers so clicking the same physical sensor in
     // either view lands on the same selection.
     function selectSensor(sensorIdx1) {
+      selectedSensorIdx1 = sensorIdx1;
       timelines.setSensor(sensorIdx1 - 1);
       histogram.setSensor(sensorIdx1 - 1);
     }
@@ -161,6 +169,10 @@ async function main() {
       wing.setVisible(show3d);
       wing2d.setVisible(!show3d);
       wing.setPaused(paused);
+      // Restore whatever sensor the user had manually selected (across the axis
+      // reload), rather than defaulting to this new set's own top1 -- only fall
+      // back to top1 on the very first load, when nothing's been picked yet.
+      selectSensor(selectedSensorIdx1 ?? payload.optimalSensors.top1);
       accuracyN.textContent = String(sensorCount);
       accuracyValue.textContent = `${(payload.accuracyBySensorCount[sensorCount - 1] * 100).toFixed(0)}%`;
       updateAccuracyNotice();
