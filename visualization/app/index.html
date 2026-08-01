@@ -52,7 +52,9 @@
   #canvas-wrap, #wing2d-wrap { position: absolute; inset: 0; }
   #wing2d-wrap {
     display: flex; align-items: center; justify-content: center;
-    padding: 0.5rem;
+    /* extra top padding clears #left-panel-note, which sits above this at a
+       fixed position regardless of which view (2D/3D) is showing */
+    padding: 2.6rem 0.5rem 0.5rem;
   }
   /* grid (not flex+gap) so each condition gets an equal-width column and is
      centered WITHIN that column, instead of the pair being centered as one
@@ -68,6 +70,13 @@
     position: absolute; left: 0.6rem; bottom: 0.6rem; z-index: 2;
     background: #12151c; color: #e6e6e6; border: 1px solid #3d5166; border-radius: 4px;
     padding: 4px 10px; font: 0.75rem system-ui, sans-serif; cursor: pointer;
+  }
+  /* Sits above both canvas-wrap and wing2d-wrap (whichever is showing) and
+     doesn't intercept clicks/drags meant for the wing views underneath. */
+  #left-panel-note {
+    position: absolute; top: 0.5rem; left: 0.5rem; right: 0.5rem; z-index: 2;
+    text-align: center; pointer-events: none;
+    color: #898781; font: 0.7rem system-ui, sans-serif;
   }
 
   #right-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
@@ -110,6 +119,7 @@
   </div>
   <div id="main">
     <div id="left-panel">
+      <div id="left-panel-note">While the two wings' strain and probability of neuron activation look almost identical, a small set of properly-placed neurons like those shown can sense this small difference.</div>
       <div id="canvas-wrap"></div>
       <div id="wing2d-wrap">
         <div id="wing2d-canvases"></div>
