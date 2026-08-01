@@ -272,10 +272,11 @@ export function createHistogram(container, manifest, payload) {
     // stat was always correct -- only this display rounding hid the real
     // difference.
     const fmt = (v) => (v === null ? "no spikes" : `${v.toFixed(2)}ms`);
-    // Signed flap - rotate, in the same units/precision as the means above --
+    // Signed rotate - flap (i.e. the shift ADDING rotation causes, relative to
+    // flap-only as the baseline), same units/precision as the means above --
     // only meaningful when both conditions actually have spikes in this
     // region; otherwise there's nothing to difference.
-    const fmtDiff = (a, b) => (a === null || b === null ? "n/a" : `${(a - b >= 0 ? "+" : "")}${(a - b).toFixed(2)}ms`);
+    const fmtDiff = (a, b) => (a === null || b === null ? "n/a" : `${(b - a >= 0 ? "+" : "")}${(b - a).toFixed(2)}ms`);
     statsEl.innerHTML = dataSegs
       .map((seg, i) => {
         const range = `${Math.round(seg.start * dt)}–${Math.round((seg.end - 1) * dt)}ms`;
@@ -285,7 +286,7 @@ export function createHistogram(container, manifest, payload) {
           `<span style="color:${COLORS.flap.bar}">flap</span> mean ${fmt(seg.stats.flap.mean)}` +
           ` · ` +
           `<span style="color:${COLORS.rotate.bar}">rotate</span> mean ${fmt(seg.stats.rotate.mean)}` +
-          ` · diff (flap−rotate) ${fmtDiff(seg.stats.flap.mean, seg.stats.rotate.mean)}`
+          ` · diff (rotate−flap) ${fmtDiff(seg.stats.flap.mean, seg.stats.rotate.mean)}`
         );
       })
       .join("<br>");
